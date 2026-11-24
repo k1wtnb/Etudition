@@ -1,0 +1,4 @@
+# コンテナの中（Linux）で使うファイルは、Windows で clone しても LF のままにする
+*.sh text eol=lf
+Dockerfile text eol=lf
+.devcontainer/** text eol=lf
