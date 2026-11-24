@@ -1,0 +1,48 @@
+{
+  // Etudition の開発用コンテナ。計画（Etudition-dev の planning/implementation-plan.md の 2-6、D5）
+  // 実行環境は Podman（VS Code の設定 "dev.containers.dockerPath": "podman"）
+  "name": "Etudition (Rust + Tauri + Node, sandboxed)",
+  "build": { "dockerfile": "Dockerfile" },
+
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
+  },
+
+  // NET_ADMIN / NET_RAW は、コンテナの中の通信の制限（iptables）に使う
+  "runArgs": ["--cap-add=NET_ADMIN", "--cap-add=NET_RAW"],
+  "remoteUser": "vscode",
+  "updateRemoteUserUID": false,
+
+  // 設計の文書は兄弟のリポジトリ Etudition-dev にある（CLAUDE.md が ../Etudition-dev/ を指す）
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/Etudition,type=bind",
+  "workspaceFolder": "/workspaces/Etudition",
+  "mounts": [
+    "source=${localWorkspaceFolder}/../Etudition-dev,target=/workspaces/Etudition-dev,type=bind",
+    // Claude と gh の認証は、ホストではなくボリュームに置く（作り直しても残る）
+    "source=claude-config-${devcontainerId},target=/home/vscode/.claude,type=volume",
+    "source=gh-config-${devcontainerId},target=/home/vscode/.config/gh,type=volume",
+    // cargo と pnpm の取得物の置き場（作り直しても残す）
+    "source=etudition-cargo-registry,target=/usr/local/cargo/registry,type=volume",
+    "source=etudition-pnpm-store,target=/home/vscode/.local/share/pnpm,type=volume"
+  ],
+
+  "containerEnv": {
+    "DISABLE_AUTOUPDATER": "1"
+  },
+
+  // 起動のたびに、外への通信を許可リストに絞る
+  "postStartCommand": "sudo /usr/local/bin/etudition-firewall.sh",
+  "waitFor": "postStartCommand",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "svelte.svelte-vscode",
+        "tauri-apps.tauri-vscode",
+        "anthropic.claude-code"
+      ]
+    }
+  }
+}
