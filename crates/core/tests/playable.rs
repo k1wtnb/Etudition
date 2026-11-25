@@ -94,18 +94,65 @@ fn unsupported_element_stops_with_its_name_and_place() {
     assert!(why[0].starts_with("Some(0) sound@fine:"), "{why:?}");
 }
 
-/// AC-45 の5：終わらない繰り返し（展開の歩数の上限を超える）。
+/// AC-45 の5：終わらない繰り返し。D.S. の後の To Coda が、自分の小節を Coda として指す（跳ぶたびに同じ小節へ戻る）。
 #[test]
 fn endless_repeat_stops() {
-    let xml = one_measure(&format!(
-        "{C4}<barline location=\"right\"><repeat direction=\"backward\" times=\"1000\"/></barline>"
-    ));
+    let m = |num: u32, extra: &str| {
+        format!(
+            "<measure number=\"{num}\">{extra}<note><pitch><step>C</step><octave>4</octave></pitch><duration>4</duration></note></measure>"
+        )
+    };
+    let xml = format!(
+        r#"<?xml version="1.0"?>
+<score-partwise><part-list/><part id="P1">{}{}{}</part></score-partwise>"#,
+        m(
+            1,
+            "<attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time></attributes><sound segno=\"s\"/>"
+        ),
+        m(2, "<sound tocoda=\"c\" coda=\"c\"/>"),
+        m(3, "<sound dalsegno=\"s\"/>"),
+    );
     let why = load_playable(xml.as_bytes()).expect_err("止まるはず");
     assert!(
         why.iter()
             .any(|w| w.contains("repeat: 繰り返しの展開が終わらない")),
         "{why:?}"
     );
+}
+
+/// 記号の指す回数が多くても、有限なら展開する（終わらない繰り返しと区別する）。
+#[test]
+fn many_but_finite_repeats_expand() {
+    let xml = one_measure(&format!(
+        "{C4}<barline location=\"right\"><repeat direction=\"backward\" times=\"1000\"/></barline>"
+    ));
+    let e = load_playable(xml.as_bytes()).expect("展開できるはず");
+    assert_eq!(e.measures.len(), 1000);
+}
+
+/// AC-03：direction-type の中の、鳴る音を変えうる読まない記号（オクターブの移動）で止まる。
+#[test]
+fn octave_shift_stops() {
+    let xml = one_measure(&format!(
+        "<direction><direction-type><octave-shift type=\"down\" size=\"8\"/></direction-type></direction>{C4}"
+    ));
+    let why = load_playable(xml.as_bytes()).expect_err("止まるはず");
+    assert_eq!(why.len(), 1, "{why:?}");
+    assert!(why[0].starts_with("Some(0) octave-shift:"), "{why:?}");
+}
+
+/// 文字だけの D.C. は、跳び先が分からないので止まる。表示だけの文字（強弱など）では止まらない。
+#[test]
+fn jump_words_without_sound_stop() {
+    let dc = one_measure(&format!(
+        "{C4}<direction><direction-type><words>D.C. al Fine</words></direction-type></direction>"
+    ));
+    let why = load_playable(dc.as_bytes()).expect_err("止まるはず");
+    assert!(why[0].starts_with("Some(0) words:"), "{why:?}");
+    let plain = one_measure(&format!(
+        "<direction><direction-type><words>dolce</words></direction-type></direction><direction><direction-type><dynamics><p/></dynamics></direction-type></direction>{C4}"
+    ));
+    assert!(load_playable(plain.as_bytes()).is_ok());
 }
 
 /// AC-04：日本語を含むパスにある `.mxl` と `.musicxml` を読める。

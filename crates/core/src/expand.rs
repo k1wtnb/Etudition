@@ -58,9 +58,13 @@ pub struct Expansion {
 /// 扱う記号：前向き・後ろ向きの繰り返し記号（`times`）、かっこ（番号の一覧）、
 /// D.S.（`dalsegno` で `segno` へ戻る。1回だけ）と、D.S. の後の To Coda（`tocoda` で `coda` へ跳ぶ）。
 /// D.S. の後に出てくる繰り返し記号とかっこは扱わず、問題として返す（慣習が割れるため。試験の楽譜にない）。
-/// 展開の歩数が「小節の数 × 上限」を超えたら、止めて問題として返す（REQ-105）。
+/// 展開が同じ状態（小節、繰り返しの頭、何周目、D.S. の後か）に2度来たら、終わらない繰り返しとして止める（REQ-105）。
+/// 記号の指す回数どおりの繰り返しは、周の番号が変わるので同じ状態にならず、止めない。
+/// 念のため、歩数が [`MAX_STEPS`] を超えたときも止める（記号の回数が大きすぎる楽譜）。
+/// 展開した小節の数の上限（念のための上限。1小節 4 拍として、テンポ 60 で約 11 時間）。
+const MAX_STEPS: usize = 10_000;
+
 fn measure_order(score: &Score, issues: &mut Vec<Issue>) -> Vec<usize> {
-    const MAX_STEPS_PER_MEASURE: usize = 16;
     let ms = &score.measures;
     let n = ms.len();
     let mut order = Vec::new();
@@ -80,9 +84,22 @@ fn measure_order(score: &Score, issues: &mut Vec<Issue>) -> Vec<usize> {
     let find = |label: &String, f: fn(&crate::score::Measure) -> &Option<String>| {
         ms.iter().position(|m| f(m).as_ref() == Some(label))
     };
+    let mut seen = std::collections::BTreeSet::new();
     while i < n {
-        if order.len() > n * MAX_STEPS_PER_MEASURE {
-            issue(i, "repeat", "繰り返しの展開が終わらない");
+        if !seen.insert((i, repeat_start, round, jumped_back, after_ds)) {
+            issue(
+                i,
+                "repeat",
+                "繰り返しの展開が終わらない（同じ位置を記号の指す回数より多く通る）",
+            );
+            break;
+        }
+        if order.len() > MAX_STEPS {
+            issue(
+                i,
+                "repeat",
+                "繰り返しの展開が長すぎる（記号の回数が大きすぎる）",
+            );
             break;
         }
         let m = &ms[i];
