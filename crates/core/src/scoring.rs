@@ -1,12 +1,12 @@
 //! 採点（採点の仕様 v0 の3〜5章、7-4。境界の約束 B0 の 2-3〜2-5）。
 //!
 //! どの関数も純粋で、同じ入力なら同じ出力を返す（REQ-086、SR-13）。浮動小数点は使わない（計画 2-3 の4）。
-//! 回の終わりの判定（`decide_end`）と、止まった回の採点（SR-22）は 1a-9 で足す。
+//! 回の終わりの判定（`decide_end`、SR-20、SR-21）と、止まった回の採点（SR-22）は 1a-9 で足した。
 
 use std::collections::BTreeMap;
 
 use crate::expand::SoundingNote;
-use crate::perf::{PerfEvent, PlayedNote, build_notes};
+use crate::perf::{PerfEvent, PerfKind, PlayedNote, build_notes};
 use crate::rules::Rules;
 use crate::timing::{Timing, position_to_ns, span_to_ns};
 
@@ -162,8 +162,14 @@ struct Matching {
 }
 
 /// 範囲に入った演奏の音を作り、和音をまとめ直し（SR-09、SR-10）、動的計画法で対応付ける（SR-11、SR-12）。
-/// `end_ns` より後のイベントは使わない。お手本は先頭の `ref_count` 個だけを使う（演奏中の印のため）。
-fn match_notes(input: &RunInput, end_ns: i64, ref_count: usize) -> Matching {
+/// `end_ns` より後のイベントは使わない。お手本は先頭の `ref_count` 個だけを使う（演奏中の印、止まった回のため）。
+/// 演奏の音は `keep` が真のものだけを使う（止まった回の SR-22）。
+fn match_notes(
+    input: &RunInput,
+    end_ns: i64,
+    ref_count: usize,
+    keep: &dyn Fn(&PlayedNote) -> bool,
+) -> Matching {
     let rules = input.rules;
     let tempo = &input.timing.tempo;
     let w = span_to_ns(tempo, rules.match_window);
@@ -179,7 +185,7 @@ fn match_notes(input: &RunInput, end_ns: i64, ref_count: usize) -> Matching {
     // SR-09：ノートオンが範囲の始まりより前の音は無視する（始まりちょうどは入る）
     let in_range: Vec<PlayedNote> = build_notes(input.events, end_ns)
         .into_iter()
-        .filter(|p| p.on_ns >= range_start)
+        .filter(|p| p.on_ns >= range_start && keep(p))
         .collect();
 
     // SR-10：組の最初の音から CHORD_SPREAD 未満で来た音を同じ組にし、組の中を音高の順（同じなら受け取った順）にする
@@ -313,16 +319,39 @@ fn count(n: usize) -> u32 {
 
 /// 終わった回を採点する（SR-14〜SR-19）。`end.at_ns` より後のノートオンは捨てる。
 ///
-/// 止まった回（`EndKind::Stopped`）は q と合否を出さない。止まった位置より前に絞る採点（SR-22）は 1a-9 で足す。
+/// 止まった回（`EndKind::Stopped`）は q と合否を出さない（SR-22）。止まった位置（次に来るはずだった組）より前の
+/// お手本の音と、次の演奏の音だけで対応付ける：ノートオンが「その組の時刻 − 対応の窓」より前の音、または
+/// SR-20 で止まった位置より前の組に割り当てた音。`notes` は止まった位置より前のお手本の音だけを持ち、
+/// `stopped_at` は止まった位置の組の先頭の `ref_index`。
 pub fn score_run(input: &RunInput, end: RunEnd) -> RunResult {
     let rules = input.rules;
     let tempo = &input.timing.tempo;
     let tolerance = span_to_ns(tempo, rules.timing_tolerance);
-    let m = match_notes(input, end.at_ns, input.reference.len());
+    let mut stopped_at = None;
+    let m = if end.kind == EndKind::Stopped {
+        let groups = Groups::new(input);
+        let stop_group = groups.state_at(input, end.at_ns).next_group(&groups);
+        match stop_group {
+            Some(g) => {
+                let e_s = groups.times[g];
+                let ref_count = groups.ref_ns.iter().take_while(|&&e| e < e_s).count();
+                stopped_at = Some(ref_count);
+                let edge = e_s.saturating_sub(groups.w);
+                let keep = |p: &PlayedNote| {
+                    p.on_ns < edge || groups.assign(p.on_ns).is_some_and(|a| a < g)
+                };
+                match_notes(input, end.at_ns, ref_count, &keep)
+            }
+            None => match_notes(input, end.at_ns, input.reference.len(), &|_| true),
+        }
+    } else {
+        match_notes(input, end.at_ns, input.reference.len(), &|_| true)
+    };
+    let ref_count = m.ref_ns.len();
 
     let mut used = vec![false; m.played.len()];
-    let mut notes = Vec::with_capacity(input.reference.len());
-    for (i, r) in input.reference.iter().enumerate() {
+    let mut notes = Vec::with_capacity(ref_count);
+    for (i, r) in input.reference[..ref_count].iter().enumerate() {
         let judged = match m.pair[i] {
             None => NoteJudgement {
                 ref_index: i,
@@ -404,7 +433,7 @@ pub fn score_run(input: &RunInput, end: RunEnd) -> RunResult {
         extras,
         items,
         passed,
-        stopped_at: None,
+        stopped_at,
     }
 }
 
@@ -432,7 +461,7 @@ pub fn marks_closed_between(input: &RunInput, after_ns: i64, until_ns: i64) -> V
     for (close, refs) in by_close {
         // お手本は位置の順（SR-01）なので、窓が閉じた音は先頭からの並びになる
         let ref_count = closes.iter().take_while(|&&c| c <= close).count();
-        let m = match_notes(input, close, ref_count);
+        let m = match_notes(input, close, ref_count, &|_| true);
         for i in refs {
             let mark = match m.pair[i] {
                 None => NoteMark {
@@ -454,6 +483,196 @@ pub fn marks_closed_between(input: &RunInput, after_ns: i64, until_ns: i64) -> V
         }
     }
     marks
+}
+
+/// お手本の組（同じ時刻の音）と、回の終わりを決める値（SR-20、SR-21）。
+struct Groups {
+    /// お手本の音の時刻（`reference` の順）。
+    ref_ns: Vec<i64>,
+    /// 組の時刻（早い順、重なりなし）。
+    times: Vec<i64>,
+    /// 対応の窓（ns）。
+    w: i64,
+    /// 範囲の始まり（ns）。
+    range_start: i64,
+    /// 最後のお手本の音の終わり ＋ `end_cap_ns`。
+    cap_ns: i64,
+}
+
+impl Groups {
+    fn new(input: &RunInput) -> Groups {
+        let tempo = &input.timing.tempo;
+        let w = span_to_ns(tempo, input.rules.match_window);
+        let ref_ns: Vec<i64> = input
+            .reference
+            .iter()
+            .map(|r| position_to_ns(&input.timing, r.start))
+            .collect();
+        let mut times = ref_ns.clone();
+        times.sort_unstable();
+        times.dedup();
+        let f_last = input
+            .reference
+            .iter()
+            .zip(&ref_ns)
+            .map(|(r, e)| e.saturating_add(span_to_ns(tempo, r.duration)))
+            .max()
+            .unwrap_or(i64::MAX);
+        Groups {
+            range_start: times.first().map_or(i64::MAX, |e| e.saturating_sub(w)),
+            cap_ns: f_last.saturating_add(input.rules.end_cap_ns),
+            ref_ns,
+            times,
+            w,
+        }
+    }
+
+    /// SR-20：ノートオンの時刻 t を、窓に t を含む組のうち時刻が最も近い組（同じ近さなら早い組）に割り当てる。
+    fn assign(&self, t: i64) -> Option<usize> {
+        self.times
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| (t - **e).abs() <= self.w)
+            .min_by_key(|(g, e)| ((t - **e).abs(), *g))
+            .map(|(g, _)| g)
+    }
+
+    /// 最後の組の打鍵か（最後の組に割り当てた打鍵、または最後の組の時刻 ＋ 窓より後の打鍵）。
+    fn is_last_hit(&self, t: i64) -> bool {
+        match self.times.last() {
+            Some(&e_last) => self.assign(t) == Some(self.times.len() - 1) || t > e_last + self.w,
+            None => false,
+        }
+    }
+
+    /// 時刻 `until` までの入力で回を進めた状態（`until` ちょうどのイベントまで含める）。
+    fn state_at(&self, input: &RunInput, until: i64) -> EndState {
+        let mut st = EndState::default();
+        for e in sorted_events(input.events) {
+            if e.t_ns > until {
+                break;
+            }
+            st.apply(self, e);
+        }
+        st
+    }
+}
+
+/// 回の終わりを決めるための、入力を進めた状態。
+#[derive(Default)]
+struct EndState {
+    /// 押されている鍵（範囲に入った打鍵だけ）。
+    held: Vec<u8>,
+    /// 最後の組の打鍵があったか。
+    last_hit: bool,
+    /// 最後のノートオンの時刻と、割り当てた組。
+    last_on: Option<(i64, Option<usize>)>,
+}
+
+impl EndState {
+    /// 1つのイベントを進める。正常の終わり（最後の組の打鍵の後、押されている鍵がなくなった）なら真。
+    fn apply(&mut self, g: &Groups, e: &PerfEvent) -> bool {
+        let off = e.kind == PerfKind::Off || e.velocity == 0;
+        if off {
+            if let Some(k) = self.held.iter().position(|&n| n == e.note) {
+                self.held.remove(k);
+                return self.last_hit && self.held.is_empty();
+            }
+            return false;
+        }
+        if e.t_ns < g.range_start {
+            return false;
+        }
+        if !self.held.contains(&e.note) {
+            self.held.push(e.note);
+        }
+        if g.is_last_hit(e.t_ns) {
+            self.last_hit = true;
+        }
+        self.last_on = Some((e.t_ns, g.assign(e.t_ns)));
+        false
+    }
+
+    /// 次に来るはずの組（SR-21 の「止まった」の行）。最後の組の打鍵の後はない。
+    fn next_group(&self, g: &Groups) -> Option<usize> {
+        if self.last_hit {
+            return None;
+        }
+        let next = match self.last_on {
+            None => 0,
+            Some((_, Some(a))) => a + 1,
+            Some((t, None)) => g.times.iter().take_while(|&&e| e <= t).count(),
+        };
+        (next < g.times.len()).then_some(next)
+    }
+
+    /// 止まったの時刻（次に来るはずの組の時刻 ＋ `stop_timeout_ns`）。
+    fn stop_deadline(&self, g: &Groups, input: &RunInput) -> Option<i64> {
+        self.next_group(g)
+            .map(|n| g.times[n].saturating_add(input.rules.stop_timeout_ns))
+    }
+}
+
+/// イベントを時刻の順、同じ時刻ではノートオフを先、さらに同じなら受け取った順に並べる（SR-07）。
+fn sorted_events(events: &[PerfEvent]) -> Vec<&PerfEvent> {
+    let mut v: Vec<(usize, &PerfEvent)> = events.iter().enumerate().collect();
+    v.sort_by_key(|(i, e)| {
+        let on = e.kind == PerfKind::On && e.velocity != 0;
+        (e.t_ns, on, *i)
+    });
+    v.into_iter().map(|(_, e)| e).collect()
+}
+
+/// 回の終わりを決める（SR-20、SR-21。境界の約束 B0 の 2-4）。
+///
+/// `now_ns` までの入力で回が終わっていれば、終わり方と、規則が決める終わりの時刻を返す（呼んだ時刻ではない）。
+/// 3つの終わり方のうち最も早く成り立ったものを返し、それより後の入力では変わらない。
+/// `now_ns` に `i64::MAX` を渡すと、入力の全部で最初に成り立つ終わりを返す（流し込み）。
+///
+/// 止まったの時刻・上限の時刻ちょうどにイベントがあるときは、そのイベントを先に受ける。
+pub fn decide_end(input: &RunInput, now_ns: i64) -> Option<RunEnd> {
+    let g = Groups::new(input);
+    if g.times.is_empty() {
+        return None;
+    }
+    let end = |kind, at_ns| Some(RunEnd { kind, at_ns });
+    let mut st = EndState::default();
+    for e in sorted_events(input.events) {
+        if e.t_ns > now_ns {
+            break;
+        }
+        // このイベントより前に来た期限
+        if st.last_hit {
+            if g.cap_ns < e.t_ns {
+                return end(EndKind::Cap, g.cap_ns);
+            }
+        } else if let Some(d) = st.stop_deadline(&g, input)
+            && d < e.t_ns
+        {
+            return end(EndKind::Stopped, d);
+        }
+        let was_hit = st.last_hit;
+        if st.apply(&g, e) {
+            return end(EndKind::Normal, e.t_ns);
+        }
+        // 上限の時刻を過ぎてから初めて最後の組の打鍵が来たら、その時刻で上限の終わり（SQ-03）
+        if st.last_hit && !was_hit && e.t_ns > g.cap_ns {
+            return end(EndKind::Cap, e.t_ns);
+        }
+    }
+    if st.last_hit {
+        (g.cap_ns <= now_ns).then_some(RunEnd {
+            kind: EndKind::Cap,
+            at_ns: g.cap_ns,
+        })
+    } else {
+        st.stop_deadline(&g, input)
+            .filter(|&d| d <= now_ns)
+            .map(|d| RunEnd {
+                kind: EndKind::Stopped,
+                at_ns: d,
+            })
+    }
 }
 
 #[cfg(test)]
