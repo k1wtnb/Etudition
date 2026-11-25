@@ -94,14 +94,6 @@ fn measure_order(score: &Score, issues: &mut Vec<Issue>) -> Vec<usize> {
             );
             break;
         }
-        if order.len() >= MAX_STEPS {
-            issue(
-                i,
-                "repeat",
-                "繰り返しの展開が長すぎる（記号の回数が大きすぎる）",
-            );
-            break;
-        }
         let m = &ms[i];
         if after_ds && (m.repeat_forward || m.repeat_backward.is_some() || m.ending_start.is_some())
         {
@@ -110,6 +102,14 @@ fn measure_order(score: &Score, issues: &mut Vec<Issue>) -> Vec<usize> {
                 "repeat",
                 "D.S. の後の繰り返し記号・かっこは扱わない（無視した）",
             );
+            if order.len() >= MAX_STEPS {
+                issue(
+                    i,
+                    "repeat",
+                    "繰り返しの展開が長すぎる（記号の回数が大きすぎる）",
+                );
+                break;
+            }
             order.push(i);
             i += 1;
             continue;
@@ -129,6 +129,15 @@ fn measure_order(score: &Score, issues: &mut Vec<Issue>) -> Vec<usize> {
             }
             i = j + 1;
             continue;
+        }
+        // 上限は、実際に小節を足すところでだけ見る（弾かないかっこを飛ばす経路では見ない）
+        if order.len() >= MAX_STEPS {
+            issue(
+                i,
+                "repeat",
+                "繰り返しの展開が長すぎる（記号の回数が大きすぎる）",
+            );
+            break;
         }
         order.push(i);
         if after_ds && let Some(label) = &m.tocoda {
