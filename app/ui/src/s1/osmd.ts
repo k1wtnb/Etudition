@@ -121,17 +121,39 @@ export function resetMarkLayer(container: HTMLElement): SVGGElement | null {
   return g;
 }
 
-/** 音符の SVG の矩形の周りに、色と形の印と、何回目かの文字を描く。描けたら true。 */
+/**
+ * 音符の符頭の SVG 要素を返す。見つからなければ undefined。
+ *
+ * OSMD 2.3.1 では、和音の音は1つの VexFlow の音符を共有し、getSVGGElement() と getNoteheadSVGs() は
+ * 和音全体の要素を返す（配布コードで確かめた）。そこで、和音の音を音高の低い順に並べた順位と、
+ * 符頭を画面の下から並べた順位を対応させて、選んだ音の符頭を1つ選ぶ。数が合わなければ undefined。
+ */
+export function noteheadOf(
+  osmd: OpenSheetMusicDisplay,
+  note: Note,
+): SVGGraphicsElement | undefined {
+  const g = osmd.EngravingRules.GNote(note) as VexFlowGraphicalNote | undefined;
+  const heads = (g?.getNoteheadSVGs?.() ??
+    []) as unknown as SVGGraphicsElement[];
+  const chord = note.ParentVoiceEntry.Notes.filter(
+    (n) => !n.isRest() && n.Pitch,
+  ).sort((a, b) => a.Pitch.getHalfTone() - b.Pitch.getHalfTone());
+  if (heads.length === 0 || heads.length !== chord.length) return undefined;
+  // 画面の y は下ほど大きい。低い音ほど下にあるので、y の大きい順に並べる
+  const byY = [...heads].sort((a, b) => b.getBBox().y - a.getBBox().y);
+  return byY[chord.indexOf(note)];
+}
+
+/** 音符の符頭の周りに、色と形の印と、何回目かの文字を描く。描いた符頭の矩形を返す（描けなければ undefined）。 */
 export function drawMark(
   osmd: OpenSheetMusicDisplay,
   layer: SVGGElement,
   note: Note,
   label: string,
   color: string,
-): boolean {
-  const g = osmd.EngravingRules.GNote(note) as VexFlowGraphicalNote | undefined;
-  const el = g?.getSVGGElement?.();
-  if (!el) return false;
+): DOMRect | undefined {
+  const el = noteheadOf(osmd, note);
+  if (!el) return undefined;
   const b = el.getBBox();
   const pad = 3;
   const rect = document.createElementNS(SVG_NS, "rect");
@@ -150,5 +172,5 @@ export function drawMark(
   text.setAttribute("font-size", "11");
   text.textContent = label;
   layer.append(rect, text);
-  return true;
+  return b;
 }
