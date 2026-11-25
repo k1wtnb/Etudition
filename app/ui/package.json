@@ -11,7 +11,7 @@
     "lint": "biome check .",
     "test": "vitest run --passWithNoTests",
     "licenses": "node scripts/check-licenses.mjs",
-    "tauri": "tauri"
+    "tauri": "cd ../src-tauri && tauri"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.5"
