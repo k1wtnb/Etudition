@@ -40,8 +40,9 @@ pub struct PlayedNote {
 /// - 開いていない音のノートオフは捨てる。
 /// - 時刻が `end_ns` より後のイベントは捨てる。`end_ns` に離されていない音は `end_ns` で閉じる（SR-09 の後半、SR-21）。
 ///
-/// 戻り値の並びはノートオンの時刻の順（同じなら受け取った順）。
-pub(crate) fn build_notes(events: &[PerfEvent], end_ns: i64) -> Vec<PlayedNote> {
+/// 戻り値の並びはノートオンの時刻の順（同じなら受け取った順）。組の2つ目は、ノートオンを受け取った順番
+/// （`events` の添字。和音の中で同じ音高を受け取った順に並べるため。SR-10）。
+pub(crate) fn build_notes(events: &[PerfEvent], end_ns: i64) -> Vec<(PlayedNote, usize)> {
     let is_off = |e: &PerfEvent| e.kind == PerfKind::Off || e.velocity == 0;
     let mut order: Vec<usize> = (0..events.len()).collect();
     // ノートオフを先にする（false < true なので、ノートオンを true にする）
@@ -82,7 +83,7 @@ pub(crate) fn build_notes(events: &[PerfEvent], end_ns: i64) -> Vec<PlayedNote> 
         }
     }
     done.sort_by_key(|(key, _)| *key);
-    done.into_iter().map(|(_, n)| n).collect()
+    done.into_iter().map(|((_, seq), n)| (n, seq)).collect()
 }
 
 #[cfg(test)]
@@ -102,7 +103,7 @@ mod tests {
     fn notes(events: &[PerfEvent], end: i64) -> Vec<(u8, i64, i64)> {
         build_notes(events, end)
             .iter()
-            .map(|n| (n.note, n.on_ns, n.off_ns))
+            .map(|(n, _)| (n.note, n.on_ns, n.off_ns))
             .collect()
     }
 
