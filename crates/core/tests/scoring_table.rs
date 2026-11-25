@@ -780,3 +780,16 @@ fn sr10_same_pitch_in_a_chord_keeps_received_order() {
     assert_eq!(a.extras.len(), 1);
     assert_eq!(a.extras[0].on_ns, 4020 * MS);
 }
+
+/// 止まったの時刻ちょうどのイベントは先に受ける（AI の決め方）。T2 で r4 を弾かず、止まったの時刻 12 秒ちょうどに
+/// 初めて F4 を押すと、止まらずに、上限（11 秒）を過ぎた最後の組の打鍵として、その時刻で上限の終わりになる。
+#[test]
+fn event_exactly_at_the_stop_deadline_is_taken_first() {
+    let mut perf = as_written(&t2(), &timing(60));
+    perf[3] = P {
+        note: 65,
+        on: 12 * S,
+        off: None,
+    };
+    assert_eq!(end_of(&t2(), &perf, i64::MAX), end(EndKind::Cap, 12 * S));
+}
