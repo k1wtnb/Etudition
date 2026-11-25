@@ -739,3 +739,44 @@ fn nothing_played_stops() {
         end(EndKind::Stopped, 4 * S + 5 * S)
     );
 }
+
+/// SR-10：和音の組の中で同じ音高の打鍵は、時刻の順ではなく受け取った順に並べる（Astra の監査）。
+/// C4 の1音に対し、4.020 秒、3.980 秒の順に受け取った2打鍵。どちらも 20 ms ずれで同じ組。
+/// 受け取った順に並べ、SR-12 で戻るときに後ろ（2つ目に受け取った 3.980 秒）と組になる。
+#[test]
+fn sr10_same_pitch_in_a_chord_keeps_received_order() {
+    let refs = vec![n(60, 0, 1)];
+    let t = timing(60);
+    let ev = vec![
+        PerfEvent {
+            t_ns: 4020 * MS,
+            kind: PerfKind::On,
+            note: 60,
+            velocity: 100,
+        },
+        PerfEvent {
+            t_ns: 3980 * MS,
+            kind: PerfKind::On,
+            note: 60,
+            velocity: 100,
+        },
+        PerfEvent {
+            t_ns: 5 * S,
+            kind: PerfKind::Off,
+            note: 60,
+            velocity: 0,
+        },
+    ];
+    let a = score_run(
+        &RunInput {
+            reference: &refs,
+            timing: t,
+            events: &ev,
+            rules: &RULES_V0,
+        },
+        normal(5 * S),
+    );
+    assert_eq!(a.notes[0].played.map(|p| p.on_ns), Some(3980 * MS));
+    assert_eq!(a.extras.len(), 1);
+    assert_eq!(a.extras[0].on_ns, 4020 * MS);
+}

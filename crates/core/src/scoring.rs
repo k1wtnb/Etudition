@@ -183,9 +183,9 @@ fn match_notes(
         .map_or(i64::MAX, |&e| e.saturating_sub(w));
 
     // SR-09：ノートオンが範囲の始まりより前の音は無視する（始まりちょうどは入る）
-    let in_range: Vec<PlayedNote> = build_notes(input.events, end_ns)
+    let in_range: Vec<(PlayedNote, usize)> = build_notes(input.events, end_ns)
         .into_iter()
-        .filter(|p| p.on_ns >= range_start && keep(p))
+        .filter(|(p, _)| p.on_ns >= range_start && keep(p))
         .collect();
 
     // SR-10：組の最初の音から CHORD_SPREAD 未満で来た音を同じ組にし、組の中を音高の順（同じなら受け取った順）にする
@@ -193,15 +193,15 @@ fn match_notes(
     let mut played: Vec<PlayedNote> = Vec::with_capacity(in_range.len());
     let mut k = 0;
     while k < in_range.len() {
-        let first = in_range[k].on_ns;
+        let first = in_range[k].0.on_ns;
         let mut end = k + 1;
-        while end < in_range.len() && in_range[end].on_ns - first < spread {
+        while end < in_range.len() && in_range[end].0.on_ns - first < spread {
             end += 1;
         }
         let mut group = in_range[k..end].to_vec();
-        // 安定な並べ替えなので、同じ音高は受け取った順のまま
-        group.sort_by_key(|n| n.note);
-        played.extend(group);
+        // 同じ音高は、ノートオンを受け取った順（時刻の順ではない）
+        group.sort_by_key(|(n, seq)| (n.note, *seq));
+        played.extend(group.into_iter().map(|(n, _)| n));
         k = end;
     }
 

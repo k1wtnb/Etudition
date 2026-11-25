@@ -37,7 +37,7 @@ impl Quarters {
     }
 
     /// 定数を作る（`const` の文脈用）。約分済みで `den > 0` の値だけを渡す。
-    pub const fn new_const(num: i64, den: i64) -> Quarters {
+    pub(crate) const fn new_const(num: i64, den: i64) -> Quarters {
         assert!(den > 0, "分母が正でない");
         Quarters { num, den }
     }
