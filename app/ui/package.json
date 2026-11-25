@@ -11,10 +11,12 @@
     "lint": "biome check .",
     "test": "vitest run",
     "licenses": "node scripts/check-licenses.mjs",
+    "s1-data": "node scripts/s1-data.mjs",
     "tauri": "cd ../src-tauri && tauri"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.12.5"
+    "@tauri-apps/api": "2.12.5",
+    "opensheetmusicdisplay": "2.3.1"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.8",

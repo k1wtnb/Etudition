@@ -8,3 +8,7 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+roxmltree = "=0.21.2"
+zip = { version = "=9.8.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
