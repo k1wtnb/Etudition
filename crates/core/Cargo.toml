@@ -1,0 +1,10 @@
+[package]
+name = "etudition-core"
+description = "採点の中心。入出力・時計・スレッド・Tauri を持たない"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

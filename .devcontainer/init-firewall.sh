@@ -5,6 +5,21 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+# 失敗の出口はここ1つ。足した許可の規則を消してから、外への通信を閉じる（ループバックだけ通す）
+fail() {
+  trap - ERR
+  echo "[firewall] NG: $1"
+  iptables -F OUTPUT || true
+  iptables -A OUTPUT -o lo -j ACCEPT || true
+  iptables -P OUTPUT DROP || true
+  iptables -P INPUT DROP || true
+  ip6tables -F OUTPUT 2>/dev/null || true
+  ip6tables -P OUTPUT DROP 2>/dev/null || true
+  echo "[firewall] 外への通信を閉じた"
+  exit 1
+}
+trap 'fail "途中のコマンドが失敗した"' ERR
+
 ALLOWED_DOMAINS=(
   # Claude Code
   api.anthropic.com
@@ -73,31 +88,27 @@ iptables -P INPUT DROP
 iptables -P FORWARD DROP
 iptables -P OUTPUT DROP
 
-# IPv6 はすべて止める（ループバックだけ通す）
-if command -v ip6tables >/dev/null 2>&1; then
-  ip6tables -F || true
-  ip6tables -A INPUT  -i lo -j ACCEPT || true
-  ip6tables -A OUTPUT -o lo -j ACCEPT || true
-  ip6tables -P INPUT DROP || true
-  ip6tables -P FORWARD DROP || true
-  ip6tables -P OUTPUT DROP || true
+# IPv6 はすべて止める（ループバックだけ通す）。IPv6 が使える環境で止められなければ、失敗にする
+if [ -e /proc/net/if_inet6 ]; then
+  ip6tables -F
+  ip6tables -A INPUT  -i lo -j ACCEPT
+  ip6tables -A OUTPUT -o lo -j ACCEPT
+  ip6tables -P INPUT DROP
+  ip6tables -P FORWARD DROP
+  ip6tables -P OUTPUT DROP
 fi
 
 echo "[firewall] 確かめる"
 if curl -fsS --connect-timeout 5 https://example.com >/dev/null 2>&1; then
-  echo "[firewall] NG: example.com に届いてしまう"
-  exit 1
+  fail "example.com に届いてしまう"
 fi
 if ! curl -fsS --connect-timeout 5 https://api.github.com/zen >/dev/null 2>&1; then
-  echo "[firewall] NG: api.github.com に届かない"
-  exit 1
+  fail "api.github.com に届かない"
 fi
 if ! curl -fsS --connect-timeout 5 -o /dev/null https://index.crates.io/config.json; then
-  echo "[firewall] NG: index.crates.io に届かない"
-  exit 1
+  fail "index.crates.io に届かない"
 fi
 if ! curl -fsS --connect-timeout 5 -o /dev/null https://registry.npmjs.org/pnpm; then
-  echo "[firewall] NG: registry.npmjs.org に届かない"
-  exit 1
+  fail "registry.npmjs.org に届かない"
 fi
 echo "[firewall] OK: 許可リストの先だけに届く"

@@ -1,0 +1,51 @@
+# cargo-deny の設定。許可するライセンスは、人間が認めた許可表（Etudition-dev の requirements.md の REQ-099、
+# conditions-round2.md の 16-11）に合わせる。将来公開するときに支障にならない、寛容なライセンスだけを許す。
+# MPL-2.0 は「改変せずに使う場合だけ」なので、一括では許さず、要るときに部品ごとに例外として足す（許可表 REQ-099 に従って足し、足したら人間に報告する）。
+# GPL、AGPL、LGPL は許さない。
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# 許可したライセンスが今の依存に出てこなくても、警告にしない（依存はこれから増える）
+unused-allowed-license = "allow"
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unlicense",
+  "Unicode-3.0",
+  "CC0-1.0",
+  "BSL-1.0",
+]
+# MPL-2.0 の部品ごとの例外。どれも Tauri が間接に使うもので、crates.io の物を改変せずに使う
+# （許可表 REQ-099「MPL-2.0 は改変せずに使う場合だけ使ってよい」。2026-11-25 に P0 で足した）
+exceptions = [
+  { crate = "cssparser", allow = ["MPL-2.0"] },
+  { crate = "cssparser-macros", allow = ["MPL-2.0"] },
+  { crate = "dtoa-short", allow = ["MPL-2.0"] },
+  { crate = "option-ext", allow = ["MPL-2.0"] },
+  { crate = "selectors", allow = ["MPL-2.0"] },
+]
+
+[licenses.private]
+# このワークスペースのクレート（publish = false）は、ライセンスの検査から外す
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
