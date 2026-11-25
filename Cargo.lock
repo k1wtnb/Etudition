@@ -813,6 +813,10 @@ dependencies = [
 [[package]]
 name = "etudition-cli"
 version = "0.1.0"
+dependencies = [
+ "etudition-core",
+ "serde_json",
+]
 
 [[package]]
 name = "etudition-core"
