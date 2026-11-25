@@ -54,7 +54,9 @@ pub struct Expansion {
 
 /// 小節の弾く順番（元の小節の番号の列）を決める。
 ///
-/// 扱う記号：前向き・後ろ向きの繰り返し記号（`times`）、かっこ（番号の一覧）。
+/// 扱う記号：前向き・後ろ向きの繰り返し記号（`times`）、かっこ（番号の一覧）、
+/// D.S.（`dalsegno` で `segno` へ戻る。1回だけ）と、D.S. の後の To Coda（`tocoda` で `coda` へ跳ぶ）。
+/// D.S. の後に出てくる繰り返し記号とかっこは扱わず、問題として返す（慣習が割れるため。試験の楽譜にない）。
 /// 展開の歩数が「小節の数 × 上限」を超えたら、止めて問題として返す（REQ-105）。
 fn measure_order(score: &Score, issues: &mut Vec<Issue>) -> Vec<usize> {
     const MAX_STEPS_PER_MEASURE: usize = 16;
@@ -66,16 +68,34 @@ fn measure_order(score: &Score, issues: &mut Vec<Issue>) -> Vec<usize> {
     let mut repeat_start = 0;
     let mut round = 1u32;
     let mut jumped_back = false;
+    let mut after_ds = false;
+    let mut issue = |i: usize, element: &str, detail: &str| {
+        issues.push(Issue {
+            measure_index: Some(i),
+            element: element.into(),
+            detail: detail.into(),
+        })
+    };
+    let find = |label: &String, f: fn(&crate::score::Measure) -> &Option<String>| {
+        ms.iter().position(|m| f(m).as_ref() == Some(label))
+    };
     while i < n {
         if order.len() > n * MAX_STEPS_PER_MEASURE {
-            issues.push(Issue {
-                measure_index: Some(i),
-                element: "repeat".into(),
-                detail: "繰り返しの展開が終わらない".into(),
-            });
+            issue(i, "repeat", "繰り返しの展開が終わらない");
             break;
         }
         let m = &ms[i];
+        if after_ds && (m.repeat_forward || m.repeat_backward.is_some() || m.ending_start.is_some())
+        {
+            issue(
+                i,
+                "repeat",
+                "D.S. の後の繰り返し記号・かっこは扱わない（無視した）",
+            );
+            order.push(i);
+            i += 1;
+            continue;
+        }
         if m.repeat_forward && !jumped_back {
             repeat_start = i;
             round = 1;
@@ -93,6 +113,25 @@ fn measure_order(score: &Score, issues: &mut Vec<Issue>) -> Vec<usize> {
             continue;
         }
         order.push(i);
+        if after_ds && let Some(label) = &m.tocoda {
+            match find(label, |m| &m.coda) {
+                Some(c) => {
+                    i = c;
+                    continue;
+                }
+                None => issue(i, "sound@tocoda", "跳び先の coda がない"),
+            }
+        }
+        if !after_ds && let Some(label) = &m.dalsegno {
+            match find(label, |m| &m.segno) {
+                Some(sg) => {
+                    after_ds = true;
+                    i = sg;
+                    continue;
+                }
+                None => issue(i, "sound@dalsegno", "戻り先の segno がない"),
+            }
+        }
         if let Some(times) = m.repeat_backward {
             if round < times {
                 round += 1;

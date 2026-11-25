@@ -230,3 +230,27 @@ fn repeat_and_volta() {
         ]
     );
 }
+
+#[test]
+fn dal_segno_al_coda() {
+    let score = load(include_bytes!("../../../fixtures/s1/06-ds-coda.musicxml"));
+    let (measures, sounding) = expanded(&score);
+    assert_eq!(
+        measures,
+        [
+            "m0#1@0", "m1#1@4", "m2#1@8", "m3#1@12", "m1#2@16", "m2#2@20", "m4#1@24",
+        ]
+    );
+    assert_eq!(
+        sounding,
+        [
+            "60@0+4 [P1/m0/v1/n0#1]",
+            "62@4+4 [P1/m1/v1/n0#1]",
+            "64@8+4 [P1/m2/v1/n0#1]",
+            "65@12+4 [P1/m3/v1/n0#1]",
+            "62@16+4 [P1/m1/v1/n0#2]",
+            "64@20+4 [P1/m2/v1/n0#2]",
+            "67@24+4 [P1/m4/v1/n0#1]",
+        ]
+    );
+}
