@@ -46,9 +46,10 @@ pub struct SoundingNote {
 pub struct Expansion {
     /// 展開した後の小節の列。
     pub measures: Vec<ExpandedMeasure>,
-    /// 鳴る音の列。並びは「位置、装飾音が先、音高の低い順、楽譜の順」（計画 2-3 の4）。
+    /// 鳴る音の列（お手本）。並びは「位置、音高の低い順、楽譜の順」（計画 2-3 の4、採点の仕様 v0 の SR-01）。
+    /// 装飾音も同じ位置の音として音高の順に並ぶ（S1 の「装飾音が先」は 1a-1 でやめた）。
     pub sounding: Vec<SoundingNote>,
-    /// 展開で扱えなかったこと。
+    /// 読み込み（[`Score::issues`]）と展開で扱えなかったこと。1つでもあれば [`check_playable`] が止める。
     pub issues: Vec<Issue>,
 }
 
@@ -148,8 +149,10 @@ fn measure_order(score: &Score, issues: &mut Vec<Issue>) -> Vec<usize> {
 }
 
 /// 繰り返しを展開し、鳴る音の列を作る。
+///
+/// 読み込みの問題（[`Score::issues`]）も、展開の問題の前に [`Expansion::issues`] へ写す。
 pub fn expand(score: &Score) -> Expansion {
-    let mut issues = Vec::new();
+    let mut issues = score.issues.clone();
     let order = measure_order(score, &mut issues);
 
     // 小節の頭の位置。弱起なら、1つ目の小節の頭を負にする
@@ -180,8 +183,8 @@ pub fn expand(score: &Score) -> Expansion {
     }
     events.sort_by_key(|&(start, k, _, j)| (start, k, j));
 
-    // 並びのキー（位置、装飾音でない、音高、楽譜の順）と鳴る音
-    let mut out: Vec<((Quarters, bool, i32, usize), SoundingNote)> = Vec::new();
+    // 並びのキー（位置、音高、楽譜の順。SR-01）と鳴る音
+    let mut out: Vec<((Quarters, i32, usize), SoundingNote)> = Vec::new();
     // タイの続きを待っている鳴る音（out の添字）
     let mut open: Vec<usize> = Vec::new();
     for (seq, &(start, _, em, j)) in events.iter().enumerate() {
@@ -212,7 +215,7 @@ pub fn expand(score: &Score) -> Expansion {
             open.push(out.len());
         }
         out.push((
-            (start, !n.is_grace, n.pitch, seq),
+            (start, n.pitch, seq),
             SoundingNote {
                 pitch: n.pitch,
                 start,
@@ -236,5 +239,25 @@ pub fn expand(score: &Score) -> Expansion {
         measures,
         sounding: out.into_iter().map(|(_, s)| s).collect(),
         issues,
+    }
+}
+
+/// 採点に使える楽譜かを確かめる（B07、REQ-105。境界の約束 B0 の 2-1）。
+///
+/// 読めない要素、パートが2つ以上、終わらない繰り返し、タイの食い違いなど、[`Expansion::issues`] が1つでもあるとき、
+/// またはお手本の音が0個のときは、理由の一覧を返して止める。黙って捨てて先へ進まない（AC-03、AC-45）。
+pub fn check_playable(expansion: &Expansion) -> Result<(), Vec<Issue>> {
+    let mut issues = expansion.issues.clone();
+    if expansion.sounding.is_empty() {
+        issues.push(Issue {
+            measure_index: None,
+            element: "note".into(),
+            detail: "音高のある音符が0個（採点できない）".into(),
+        });
+    }
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(issues)
     }
 }

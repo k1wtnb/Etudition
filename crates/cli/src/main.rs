@@ -50,10 +50,10 @@ fn q(x: Quarters) -> Value {
 fn s1_json(loaded: &LoadedScore) -> Value {
     let score = &loaded.score;
     let e = expand(score);
-    let issues: Vec<Value> = score
+    // 展開の結果の issues は、読み込みの問題も含む（expand が写す）
+    let issues: Vec<Value> = e
         .issues
         .iter()
-        .chain(&e.issues)
         .map(|i| json!({ "measure_index": i.measure_index, "element": i.element, "detail": i.detail }))
         .collect();
     json!({
