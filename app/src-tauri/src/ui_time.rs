@@ -11,10 +11,11 @@ use ts_rs::TS;
 pub const MAX_UI_NS: i64 = (1_i64 << 53) - 1;
 
 /// 画面に渡す時刻（前カウントの最初のクリックを 0 とする、符号付きのナノ秒）。
+/// 範囲の確かめを必ず通すため、値は `UiTime::new` でだけ作れる。
 #[derive(Debug, PartialEq, Eq, Serialize, TS)]
 pub struct UiTime {
     #[ts(type = "number")]
-    pub ns: i64,
+    ns: i64,
 }
 
 impl UiTime {
