@@ -94,7 +94,7 @@ fn measure_order(score: &Score, issues: &mut Vec<Issue>) -> Vec<usize> {
             );
             break;
         }
-        if order.len() > MAX_STEPS {
+        if order.len() >= MAX_STEPS {
             issue(
                 i,
                 "repeat",

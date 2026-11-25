@@ -168,7 +168,9 @@ pub const IGNORED_DIRECTION_TYPES: &[&str] = &[
     "dashes",
     "bracket",
 ];
-/// 文字だけで書かれていると跳び先が分からない語（`sound` の属性がないとき、問題として返す）。
+/// 跳び先を表す `sound` の属性（`fine` と `dacapo` は読まないので、あれば [`read_sound`] が問題として返す）。
+const JUMP_SOUND_ATTRIBUTES: &[&str] = &["segno", "coda", "tocoda", "dalsegno", "dacapo", "fine"];
+/// 文字だけで書かれていると跳び先が分からない語（跳び先を表す `sound` の属性がないとき、問題として返す）。
 const JUMP_WORDS: &[&str] = &["D.C.", "D.S.", "Fine", "Coda", "Da Capo", "Dal Segno"];
 /// `sound` の属性のうち、S1 では使わないもの（テンポは練習のテンポを使う。計画 2-3 の1）。
 pub const IGNORED_SOUND_ATTRIBUTES: &[&str] = &["tempo", "dynamics"];
@@ -471,7 +473,12 @@ fn read_barline(b: roxmltree::Node, m: &mut Measure, issue: &mut impl FnMut(&str
 }
 
 fn read_direction(d: roxmltree::Node, m: &mut Measure, issue: &mut impl FnMut(&str, String)) {
-    let has_sound = d.children().any(|c| c.has_tag_name("sound"));
+    // 跳び先を表す sound の属性があるか（テンポだけの sound では、文字の跳ぶ記号を読んだことにならない）
+    let has_jump_sound = d.children().filter(|c| c.has_tag_name("sound")).any(|c| {
+        JUMP_SOUND_ATTRIBUTES
+            .iter()
+            .any(|a| c.attribute(*a).is_some())
+    });
     for c in d.children().filter(|c| c.is_element()) {
         match c.tag_name().name() {
             "sound" => read_sound(c, m, issue),
@@ -480,7 +487,7 @@ fn read_direction(d: roxmltree::Node, m: &mut Measure, issue: &mut impl FnMut(&s
                     let n = t.tag_name().name();
                     if !IGNORED_DIRECTION_TYPES.contains(&n) {
                         issue(n, "direction-type の中の読まない要素".into());
-                    } else if n == "words" && !has_sound {
+                    } else if n == "words" && !has_jump_sound {
                         let text = t.text().unwrap_or("");
                         if JUMP_WORDS.iter().any(|w| text.contains(w)) {
                             issue(

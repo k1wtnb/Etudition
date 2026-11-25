@@ -149,6 +149,13 @@ fn jump_words_without_sound_stop() {
     ));
     let why = load_playable(dc.as_bytes()).expect_err("止まるはず");
     assert!(why[0].starts_with("Some(0) words:"), "{why:?}");
+    // テンポだけの sound が同じ direction にあっても止まる
+    let dc_tempo = dc.replace(
+        "</direction-type></direction>",
+        "</direction-type><sound tempo=\"90\"/></direction>",
+    );
+    let why = load_playable(dc_tempo.as_bytes()).expect_err("止まるはず");
+    assert!(why[0].starts_with("Some(0) words:"), "{why:?}");
     let plain = one_measure(&format!(
         "<direction><direction-type><words>dolce</words></direction-type></direction><direction><direction-type><dynamics><p/></dynamics></direction-type></direction>{C4}"
     ));
