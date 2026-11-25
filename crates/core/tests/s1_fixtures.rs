@@ -254,3 +254,11 @@ fn dal_segno_al_coda() {
         ]
     );
 }
+
+#[test]
+fn mxl_is_unzipped_to_the_same_score() {
+    let xml = include_str!("../../../fixtures/s1/01-tie.musicxml");
+    let loaded = read_score(include_bytes!("../../../fixtures/s1/01-tie.mxl")).expect("読めるはず");
+    assert_eq!(loaded.xml, xml);
+    assert_eq!(loaded.score, load(xml.as_bytes()));
+}

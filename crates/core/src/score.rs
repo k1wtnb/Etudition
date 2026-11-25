@@ -473,3 +473,45 @@ fn read_sound(s: roxmltree::Node, m: &mut Measure, issue: &mut impl FnMut(&str, 
         issue(c.tag_name().name(), "sound の中の読まない要素".into());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::read_score;
+
+    #[test]
+    fn unread_elements_are_listed() {
+        let xml = r#"<?xml version="1.0"?>
+<score-partwise><part-list/><part id="P1"><measure number="1">
+  <attributes><divisions>1</divisions><transpose><chromatic>-2</chromatic></transpose></attributes>
+  <harmony><root><root-step>C</root-step></root></harmony>
+  <note><unpitched><display-step>C</display-step><display-octave>4</display-octave></unpitched><duration>1</duration></note>
+  <note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration><lyric><text>la</text></lyric></note>
+  <direction><direction-type><words>Fine</words></direction-type><sound fine="yes" tempo="90"/></direction>
+</measure></part><part id="P2"/></score-partwise>"#;
+        let score = read_score(xml.as_bytes()).expect("読めるはず").score;
+        let got: Vec<(Option<usize>, &str)> = score
+            .issues
+            .iter()
+            .map(|i| (i.measure_index, i.element.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (None, "part"),
+                (Some(0), "transpose"),
+                (Some(0), "harmony"),
+                (Some(0), "unpitched"),
+                (Some(0), "note"),
+                (Some(0), "lyric"),
+                (Some(0), "sound@fine"),
+            ]
+        );
+        assert_eq!(score.notes.len(), 1);
+    }
+
+    #[test]
+    fn broken_xml_is_an_error() {
+        assert!(read_score(b"<score-partwise>").is_err());
+        assert!(read_score(b"<score-timewise/>").is_err());
+    }
+}
