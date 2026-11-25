@@ -11,12 +11,11 @@ tauri-build = { version = "=2.7.6", features = [] }
 
 [dependencies]
 tauri = { version = "=2.12.7", features = [] }
+serde = { version = "=1.0.229", features = ["derive"] }
+ts-rs = "=12.0.1"
 
 [dev-dependencies]
-# P0 の④：ts-rs が i64 をどう書き出すか、serde_json がどう渡すかを確かめる試験だけに使う
-serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
-ts-rs = "=12.0.1"
 
 [lints]
 workspace = true
