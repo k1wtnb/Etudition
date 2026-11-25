@@ -27,6 +27,15 @@ allow = [
   "CC0-1.0",
   "BSL-1.0",
 ]
+# MPL-2.0 の部品ごとの例外。どれも Tauri が間接に使うもので、crates.io の物を改変せずに使う
+# （許可表 REQ-099「MPL-2.0 は改変せずに使う場合だけ使ってよい」。2026-11-25 に P0 で足した）
+exceptions = [
+  { crate = "cssparser", allow = ["MPL-2.0"] },
+  { crate = "cssparser-macros", allow = ["MPL-2.0"] },
+  { crate = "dtoa-short", allow = ["MPL-2.0"] },
+  { crate = "option-ext", allow = ["MPL-2.0"] },
+  { crate = "selectors", allow = ["MPL-2.0"] },
+]
 
 [licenses.private]
 # このワークスペースのクレート（publish = false）は、ライセンスの検査から外す

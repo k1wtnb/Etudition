@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "主の窓に、Tauri の既定の権限だけを与える",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
