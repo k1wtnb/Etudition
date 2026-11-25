@@ -569,3 +569,30 @@ fn marks_use_only_closed_windows() {
     assert_eq!(after.notes[1].pitch, PitchResult::Correct);
     assert!(marks_closed_between(&input, 2000 * MS, 9 * S).is_empty());
 }
+
+/// SR-12：費用が同点のときは、戻るときに「組にする」を先に選ぶ（後ろから戻るので、後の打鍵と組になる）。
+/// C4 の1音に対し、0.25 秒早い打鍵と 0.25 秒遅い打鍵がある。どちらと組にしても費用は同じ。
+#[test]
+fn sr12_tie_is_broken_deterministically() {
+    let refs = vec![r(60, (1, 1), (1, 1), false)];
+    let t = Timing {
+        tempo: Tempo::new(60, 1).unwrap(),
+        origin_ns: 0,
+    };
+    let perf = [
+        P {
+            note: 60,
+            on: 750 * MS,
+            off: Some(800 * MS),
+        },
+        P {
+            note: 60,
+            on: 1250 * MS,
+            off: Some(2 * S),
+        },
+    ];
+    let a = run(&refs, t, &perf, normal(2 * S));
+    assert_eq!(a.notes[0].played.map(|p| p.on_ns), Some(1250 * MS));
+    assert_eq!(a.extras.len(), 1);
+    assert_eq!(a.extras[0].on_ns, 750 * MS);
+}
