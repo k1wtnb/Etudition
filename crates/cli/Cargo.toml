@@ -1,0 +1,10 @@
+[package]
+name = "etudition-cli"
+description = "画面なしで core と engine を動かす（試験と S1 用）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
