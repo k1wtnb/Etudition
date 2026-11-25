@@ -1,13 +1,19 @@
 // S1 のページ（アプリ本体の画面とは別の入口）。cli の JSON と OSMD の音符を突き合わせ、結果を window.s1Result と表に出す。
 // データは app/ui/s1-data/（版の管理の外）に `pnpm run s1-data` で作る。
 import { type Note, OpenSheetMusicDisplay } from "opensheetmusicdisplay";
-import { checkSounding, compareWalk, matchWritten, type S1Json } from "./match";
+import {
+  type CursorStep,
+  checkSounding,
+  compareWalk,
+  matchWritten,
+  type S1Json,
+} from "./match";
 import {
   drawMark,
   extractNotes,
   moveCursorTo,
+  noteheadOf,
   resetMarkLayer,
-  type WalkStep,
   walkCursor,
 } from "./osmd";
 
@@ -29,6 +35,12 @@ type S1Result = {
   soundingTotal?: number;
   soundingResolved?: number;
   soundingUnresolved?: { index: number; reason: string }[];
+  /** 鳴る音ごとの、カーソルを置く歩（walk.steps の添字。なければ -1）。 */
+  soundingStepOf?: number[];
+  /** その音を含む歩がなく、代わりの位置（その回の小節の最初の歩）になった書かれた音符の数。0 でなければ2段目は不合格。 */
+  soundingFallbackRefs?: number;
+  /** 印（符頭の枠）を描けない書かれた音符の数。0 でなければ2段目は不合格。 */
+  soundingMarkFailures?: number;
   coreIssues?: S1Json["issues"];
   stage1Pass?: boolean;
   stage2Pass?: boolean;
@@ -38,6 +50,8 @@ type S1Result = {
 type SelectResult = {
   index: number;
   marks: number;
+  /** 描いた印の符頭の矩形（svg の座標）。 */
+  markRects: { x: number; y: number; width: number; height: number }[];
   cursorStep: number;
   cursorMeasureIndex?: number;
   cursorVisit?: number;
@@ -97,11 +111,24 @@ async function loadScore(entry: IndexEntry, root: HTMLElement): Promise<void> {
     const walk = walkCursor(osmd);
     const walkCore = json.expanded_measures.map((m) => m.measure_index);
     const measureOf = new Map(json.written.map((w) => [w.id, w.measure_index]));
+    // カーソルの歩みを、OSMD の音符の添字の形にする（突き合わせの純関数は OSMD に触らない）
+    const indexOf = new Map(notes.map((n, i) => [n, i]));
+    const steps: CursorStep[] = walk.steps.map((st) => ({
+      measureIndex: st.measureIndex,
+      visit: st.visit,
+      notes: new Set(
+        [...st.notes].flatMap((n) => {
+          const i = indexOf.get(n);
+          return i === undefined ? [] : [i];
+        }),
+      ),
+    }));
     const sounding = checkSounding(
       json.sounding,
       match.byCoreId,
       measureOf,
-      walk.measures,
+      steps,
+      (i) => noteheadOf(osmd, notes[i]) !== undefined,
     );
     const walkMismatch = compareWalk(
       json.expanded_measures,
@@ -121,6 +148,9 @@ async function loadScore(entry: IndexEntry, root: HTMLElement): Promise<void> {
       soundingTotal: json.sounding.length,
       soundingResolved: sounding.resolved,
       soundingUnresolved: sounding.unresolved,
+      soundingStepOf: sounding.stepOf,
+      soundingFallbackRefs: sounding.fallbackRefs,
+      soundingMarkFailures: sounding.markFailures,
       coreIssues: json.issues,
       stage1Pass:
         match.byCoreId.size === json.written.length &&
@@ -136,6 +166,7 @@ async function loadScore(entry: IndexEntry, root: HTMLElement): Promise<void> {
         json,
         notes,
         match.byCoreId,
+        sounding.stepOf,
         walk.steps,
         index,
       );
@@ -150,44 +181,34 @@ async function loadScore(entry: IndexEntry, root: HTMLElement): Promise<void> {
   }
 }
 
-/** 鳴る音を選び、書かれた音符の組に印を重ね、カーソルをその回の位置へ動かす。 */
+/** 鳴る音を選び、書かれた音符の組の符頭に印を重ね、カーソルを2段目で解決した歩（その回の位置）へ動かす。 */
 function selectSounding(
   osmd: OpenSheetMusicDisplay,
   view: HTMLElement,
   json: S1Json,
   notes: Note[],
   byCoreId: Map<string, number>,
-  steps: WalkStep[],
+  stepOf: number[],
+  steps: { measureIndex: number; visit: number }[],
   index: number,
 ): SelectResult {
   const s = json.sounding[index];
-  const r: SelectResult = { index, marks: 0, cursorStep: -1 };
+  const r: SelectResult = { index, marks: 0, markRects: [], cursorStep: -1 };
   if (!s) return { ...r, error: "その番号の鳴る音がない" };
   const layer = resetMarkLayer(view);
   if (!layer) return { ...r, error: "OSMD の svg がない" };
-  const first = s.written[0];
   const colors = ["#d33", "#1a7", "#36c"];
   for (const w of s.written) {
     const i = byCoreId.get(w.id);
     if (i === undefined) continue;
     const color = colors[(w.pass - 1) % colors.length];
-    if (drawMark(osmd, layer, notes[i], `${w.pass}回目`, color)) r.marks += 1;
+    const b = drawMark(osmd, layer, notes[i], `${w.pass}回目`, color);
+    if (b) {
+      r.marks += 1;
+      r.markRects.push({ x: b.x, y: b.y, width: b.width, height: b.height });
+    }
   }
-  const target = notes[byCoreId.get(first.id) ?? -1];
-  const measure = json.written.find((w) => w.id === first.id)?.measure_index;
-  // カーソルの下にその音符がある歩。なければ（装飾音など）その小節のその回の最初の歩
-  let step = steps.findIndex(
-    (st) =>
-      st.measureIndex === measure &&
-      st.visit === first.pass &&
-      target !== undefined &&
-      st.notes.has(target),
-  );
-  if (step < 0) {
-    step = steps.findIndex(
-      (st) => st.measureIndex === measure && st.visit === first.pass,
-    );
-  }
+  const step = stepOf[index] ?? -1;
   r.cursorStep = step;
   if (step >= 0) {
     moveCursorTo(osmd, step);
@@ -207,7 +228,7 @@ function renderSummary(root: HTMLElement, r: S1Result): void {
     ],
     [
       "2段目（鳴る音 → 書かれた音符の組と何回目か → OSMD の位置）",
-      `${r.stage2Pass ? "合格" : "不合格"}：${r.soundingResolved} / ${r.soundingTotal}、カーソルの歩みと展開の最初の食い違い：${r.walkFirstMismatch ?? "なし"}`,
+      `${r.stage2Pass ? "合格" : "不合格"}：${r.soundingResolved} / ${r.soundingTotal}、代わりの位置 ${r.soundingFallbackRefs}、印を描けない ${r.soundingMarkFailures}、カーソルの歩みと展開の最初の食い違い：${r.walkFirstMismatch ?? "なし"}`,
     ],
     ["展開（core の小節の列）", (r.walkCore ?? []).join(" ")],
     ["カーソル（OSMD の小節の列）", (r.walkOsmd ?? []).join(" ")],

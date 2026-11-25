@@ -3,6 +3,7 @@ import {
   type CoreExpanded,
   type CoreSounding,
   type CoreWritten,
+  type CursorStep,
   checkSounding,
   compareWalk,
   matchWritten,
@@ -99,20 +100,51 @@ describe("2段目：展開の順と OSMD のカーソルの歩み", () => {
     expect(compareWalk(expanded, [0, 1]).firstMismatch).toBe(2);
   });
 
-  it("鳴る音ごとに、書かれた音符の対応と、カーソルがその回に来るかを確かめる", () => {
+  it("鳴る音ごとに、対象の音を含む歩に解決し、印を描けるかを確かめる", () => {
     const sounding: Pick<CoreSounding, "written">[] = [
       { written: [{ id: "a", pass: 1 }] },
       { written: [{ id: "a", pass: 2 }] },
       { written: [{ id: "a", pass: 3 }] },
       { written: [{ id: "z", pass: 1 }] },
+      { written: [{ id: "b", pass: 1 }] },
+      { written: [{ id: "c", pass: 1 }] },
     ];
-    const byCoreId = new Map([["a", 7]]);
-    const measureOf = new Map([["a", 0]]);
-    const r = checkSounding(sounding, byCoreId, measureOf, [0, 1, 0]);
+    const byCoreId = new Map([
+      ["a", 7],
+      ["b", 8],
+      ["c", 9],
+    ]);
+    const measureOf = new Map([
+      ["a", 0],
+      ["b", 0],
+      ["c", 0],
+    ]);
+    // 小節 0 を2回通る。b（8）はどの歩にもいない。c（9）は1回目の歩にいるが印を描けない
+    const steps: CursorStep[] = [
+      { measureIndex: 0, visit: 1, notes: new Set([7, 9]) },
+      { measureIndex: 1, visit: 1, notes: new Set([]) },
+      { measureIndex: 0, visit: 2, notes: new Set([7]) },
+    ];
+    const r = checkSounding(
+      sounding,
+      byCoreId,
+      measureOf,
+      steps,
+      (i) => i !== 9,
+    );
     expect(r.resolved).toBe(2);
+    expect(r.stepOf).toEqual([0, 2, -1, -1, 0, 0]);
+    expect(r.fallbackRefs).toBe(1);
+    expect(r.markFailures).toBe(1);
     expect(r.unresolved).toEqual([
       { index: 2, reason: "a の 3 回目にカーソルが来ない" },
       { index: 3, reason: "z に OSMD の音符がない" },
+      {
+        index: 4,
+        reason:
+          "b の 1 回目は、その音を含む歩がなく代わりの位置（小節の頭）になる",
+      },
+      { index: 5, reason: "c の印を描けない" },
     ]);
   });
 });

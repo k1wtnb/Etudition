@@ -154,43 +154,78 @@ export function compareWalk(
   return { firstMismatch: null };
 }
 
+/** カーソルの1歩（OSMD に触らない形）。何回目にその小節を通っているかと、カーソルの下の音符（OSMD の音符の添字）。 */
+export type CursorStep = {
+  measureIndex: number;
+  visit: number;
+  notes: Set<number>;
+};
+
 /** 2段目の結果。 */
 export type SoundingCheck = {
-  /** 書かれた音符の組の全部が OSMD の音符に当たり、その回にカーソルが来る鳴る音の数。 */
+  /** 書かれた音符の組の全部が、OSMD の音符に当たり、その音を含むその回の歩に解決し、印を描ける鳴る音の数。 */
   resolved: number;
-  /** そうでない鳴る音（添字と理由）。 */
+  /** そうでない鳴る音（添字と、最初に見つけた理由）。 */
   unresolved: { index: number; reason: string }[];
+  /** 鳴る音ごとの、カーソルを置く歩（組の最初の音符。代わりの位置を含む。なければ -1）。 */
+  stepOf: number[];
+  /** その音を含む歩がなく、その回の小節の最初の歩（代わりの位置）になった書かれた音符の数。 */
+  fallbackRefs: number;
+  /** 印を描けない書かれた音符の数。 */
+  markFailures: number;
 };
 
 /**
- * 鳴る音ごとに、書かれた音符の組のそれぞれが OSMD の音符に当たり、
- * カーソルがその小節を何回目かに通るか（walk の中にその回数以上あるか）を確かめる。
+ * 鳴る音ごとに、書かれた音符の組のそれぞれが、OSMD の音符に当たり、
+ * カーソルの歩みの中の「その小節の、その回の、その音を含む歩」に解決するか、印を描けるかを確かめる。
+ * その音を含む歩がなく、その回の小節の最初の歩で代わりにした場合は、不合格に数える。
  */
 export function checkSounding(
   sounding: Pick<CoreSounding, "written">[],
   byCoreId: Map<string, number>,
   measureOf: Map<string, number>,
-  walk: number[],
+  steps: CursorStep[],
+  canMark: (osmdIndex: number) => boolean,
 ): SoundingCheck {
-  const visits = new Map<number, number>();
-  for (const m of walk) visits.set(m, (visits.get(m) ?? 0) + 1);
-  const r: SoundingCheck = { resolved: 0, unresolved: [] };
+  const r: SoundingCheck = {
+    resolved: 0,
+    unresolved: [],
+    stepOf: [],
+    fallbackRefs: 0,
+    markFailures: 0,
+  };
   sounding.forEach((s, index) => {
+    let reason: string | undefined;
+    let firstStep: number | undefined;
     for (const w of s.written) {
-      if (!byCoreId.has(w.id)) {
-        r.unresolved.push({ index, reason: `${w.id} に OSMD の音符がない` });
-        return;
+      const o = byCoreId.get(w.id);
+      let step = -1;
+      if (o === undefined) {
+        reason ??= `${w.id} に OSMD の音符がない`;
+      } else {
+        const m = measureOf.get(w.id) ?? -1;
+        const inVisit = (st: CursorStep) =>
+          st.measureIndex === m && st.visit === w.pass;
+        step = steps.findIndex((st) => inVisit(st) && st.notes.has(o));
+        if (step < 0) {
+          step = steps.findIndex(inVisit);
+          if (step < 0) {
+            reason ??= `${w.id} の ${w.pass} 回目にカーソルが来ない`;
+          } else {
+            r.fallbackRefs += 1;
+            reason ??= `${w.id} の ${w.pass} 回目は、その音を含む歩がなく代わりの位置（小節の頭）になる`;
+          }
+        }
+        if (!canMark(o)) {
+          r.markFailures += 1;
+          reason ??= `${w.id} の印を描けない`;
+        }
       }
-      const m = measureOf.get(w.id) ?? -1;
-      if ((visits.get(m) ?? 0) < w.pass) {
-        r.unresolved.push({
-          index,
-          reason: `${w.id} の ${w.pass} 回目にカーソルが来ない`,
-        });
-        return;
-      }
+      firstStep ??= step;
     }
-    r.resolved += 1;
+    r.stepOf.push(firstStep ?? -1);
+    if (reason === undefined) r.resolved += 1;
+    else r.unresolved.push({ index, reason });
   });
   return r;
 }
