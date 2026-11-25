@@ -53,8 +53,59 @@ pub struct Expansion {
 }
 
 /// 小節の弾く順番（元の小節の番号の列）を決める。
-fn measure_order(score: &Score, _issues: &mut Vec<Issue>) -> Vec<usize> {
-    (0..score.measures.len()).collect()
+///
+/// 扱う記号：前向き・後ろ向きの繰り返し記号（`times`）、かっこ（番号の一覧）。
+/// 展開の歩数が「小節の数 × 上限」を超えたら、止めて問題として返す（REQ-105）。
+fn measure_order(score: &Score, issues: &mut Vec<Issue>) -> Vec<usize> {
+    const MAX_STEPS_PER_MEASURE: usize = 16;
+    let ms = &score.measures;
+    let n = ms.len();
+    let mut order = Vec::new();
+    let mut i = 0;
+    // 今の繰り返しの部分の頭と、何周目か
+    let mut repeat_start = 0;
+    let mut round = 1u32;
+    let mut jumped_back = false;
+    while i < n {
+        if order.len() > n * MAX_STEPS_PER_MEASURE {
+            issues.push(Issue {
+                measure_index: Some(i),
+                element: "repeat".into(),
+                detail: "繰り返しの展開が終わらない".into(),
+            });
+            break;
+        }
+        let m = &ms[i];
+        if m.repeat_forward && !jumped_back {
+            repeat_start = i;
+            round = 1;
+        }
+        jumped_back = false;
+        // 今の周の番号を含まないかっこは、かっこの終わりまで飛ばす
+        if let Some(nums) = &m.ending_start
+            && !nums.contains(&round)
+        {
+            let mut j = i;
+            while j < n && !ms[j].ending_end {
+                j += 1;
+            }
+            i = j + 1;
+            continue;
+        }
+        order.push(i);
+        if let Some(times) = m.repeat_backward {
+            if round < times {
+                round += 1;
+                i = repeat_start;
+                jumped_back = true;
+                continue;
+            }
+            repeat_start = i + 1;
+            round = 1;
+        }
+        i += 1;
+    }
+    order
 }
 
 /// 繰り返しを展開し、鳴る音の列を作る。

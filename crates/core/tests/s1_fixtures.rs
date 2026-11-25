@@ -204,3 +204,29 @@ fn grace() {
         ]
     );
 }
+
+#[test]
+fn repeat_and_volta() {
+    let score = load(include_bytes!(
+        "../../../fixtures/s1/05-repeat-volta.musicxml"
+    ));
+    let (measures, sounding) = expanded(&score);
+    assert_eq!(
+        measures,
+        [
+            "m0#1@0", "m1#1@4", "m2#1@8", "m0#2@12", "m1#2@16", "m3#1@20", "m4#1@24",
+        ]
+    );
+    assert_eq!(
+        sounding,
+        [
+            "60@0+4 [P1/m0/v1/n0#1]",
+            "62@4+4 [P1/m1/v1/n0#1]",
+            "64@8+4 [P1/m2/v1/n0#1]",
+            "60@12+4 [P1/m0/v1/n0#2]",
+            "62@16+4 [P1/m1/v1/n0#2]",
+            "65@20+4 [P1/m3/v1/n0#1]",
+            "67@24+4 [P1/m4/v1/n0#1]",
+        ]
+    );
+}
