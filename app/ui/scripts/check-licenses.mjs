@@ -1,6 +1,7 @@
 // npm 側の依存のライセンスを、許可の一覧（Etudition-dev の requirements.md の REQ-099）と照らす。
 // 許可の一覧は、Rust 側の deny.toml と同じ。許可にないライセンスがあれば、終了コード 1 で止まる。
 import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 const ALLOWED = new Set([
   "MIT",
@@ -19,8 +20,11 @@ const ALLOWED = new Set([
 // lightningcss は Vite が使う CSS の処理系（2026-11-25 に P0 で足した）。名前の先頭で照らす（OS ごとの部品を含めるため）
 const MPL_EXCEPTIONS = ["lightningcss"];
 
-/** SPDX の式（"A OR B"、括弧つき）のうち、どれか1つが許可されていれば通す */
-function isAllowed(expr, name) {
+/**
+ * 1つのライセンス、または「A OR B」（全体を括弧で囲んでもよい）だけを判定し、どれか1つが許可されていれば通す。
+ * AND や入れ子の括弧を含む式は解釈せず、通さない（初めて出てきたときに人が確かめる）。
+ */
+export function isAllowed(expr, name) {
   if (
     expr === "MPL-2.0" &&
     MPL_EXCEPTIONS.some(
@@ -29,30 +33,41 @@ function isAllowed(expr, name) {
   ) {
     return true;
   }
-  const options = expr.replace(/[()]/g, "").split(/\s+OR\s+/);
-  return options.some((one) =>
-    one.split(/\s+AND\s+/).every((part) => ALLOWED.has(part.trim())),
-  );
+  const inner = /^\((.*)\)$/.test(expr) ? expr.slice(1, -1) : expr;
+  if (/[()]/.test(inner) || /\sAND\s/.test(inner)) {
+    return false;
+  }
+  return inner.split(/\s+OR\s+/).some((one) => ALLOWED.has(one.trim()));
 }
 
-const out = execFileSync("pnpm", ["licenses", "list", "--json"], {
-  encoding: "utf8",
-});
-const byLicense = JSON.parse(out);
-const bad = [];
-for (const [license, packages] of Object.entries(byLicense)) {
-  for (const p of packages) {
-    if (!isAllowed(license, p.name)) {
-      bad.push(
-        `${p.name}@${p.versions ? p.versions.join(",") : p.version} : ${license}`,
-      );
+function main() {
+  const out = execFileSync("pnpm", ["licenses", "list", "--json"], {
+    encoding: "utf8",
+  });
+  const byLicense = JSON.parse(out);
+  const bad = [];
+  for (const [license, packages] of Object.entries(byLicense)) {
+    for (const p of packages) {
+      if (!isAllowed(license, p.name)) {
+        bad.push(
+          `${p.name}@${p.versions ? p.versions.join(",") : p.version} : ${license}`,
+        );
+      }
     }
   }
+  const count = Object.values(byLicense).reduce(
+    (n, list) => n + list.length,
+    0,
+  );
+  if (bad.length > 0) {
+    console.error(`許可にないライセンスの依存が ${bad.length} 件ある：`);
+    for (const line of bad) console.error(`  ${line}`);
+    process.exit(1);
+  }
+  console.log(`ok: ${count} 件の依存のライセンスは、すべて許可の一覧にある`);
 }
-const count = Object.values(byLicense).reduce((n, list) => n + list.length, 0);
-if (bad.length > 0) {
-  console.error(`許可にないライセンスの依存が ${bad.length} 件ある：`);
-  for (const line of bad) console.error(`  ${line}`);
-  process.exit(1);
+
+// 直接実行したときだけ動く（試験から isAllowed を読み込めるようにする）
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main();
 }
-console.log(`ok: ${count} 件の依存のライセンスは、すべて許可の一覧にある`);

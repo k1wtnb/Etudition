@@ -5,6 +5,15 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+# 途中で失敗したら、外への通信を閉じて終わる（開いたまま残さない）
+close_on_failure() {
+  iptables -P OUTPUT DROP || true
+  iptables -P INPUT DROP || true
+  ip6tables -P OUTPUT DROP 2>/dev/null || true
+  echo "[firewall] NG: 途中で失敗したので、外への通信を閉じた"
+}
+trap close_on_failure ERR
+
 ALLOWED_DOMAINS=(
   # Claude Code
   api.anthropic.com
@@ -73,14 +82,14 @@ iptables -P INPUT DROP
 iptables -P FORWARD DROP
 iptables -P OUTPUT DROP
 
-# IPv6 はすべて止める（ループバックだけ通す）
-if command -v ip6tables >/dev/null 2>&1; then
-  ip6tables -F || true
-  ip6tables -A INPUT  -i lo -j ACCEPT || true
-  ip6tables -A OUTPUT -o lo -j ACCEPT || true
-  ip6tables -P INPUT DROP || true
-  ip6tables -P FORWARD DROP || true
-  ip6tables -P OUTPUT DROP || true
+# IPv6 はすべて止める（ループバックだけ通す）。IPv6 が使える環境で止められなければ、失敗にする
+if [ -e /proc/net/if_inet6 ]; then
+  ip6tables -F
+  ip6tables -A INPUT  -i lo -j ACCEPT
+  ip6tables -A OUTPUT -o lo -j ACCEPT
+  ip6tables -P INPUT DROP
+  ip6tables -P FORWARD DROP
+  ip6tables -P OUTPUT DROP
 fi
 
 echo "[firewall] 確かめる"
