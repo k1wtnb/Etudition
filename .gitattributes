@@ -1,4 +1,2 @@
-# コンテナの中（Linux）で使うファイルは、Windows で clone しても LF のままにする
-*.sh text eol=lf
-Dockerfile text eol=lf
-.devcontainer/** text eol=lf
+# 開発は Linux のコンテナの中で行うので、Windows で clone しても、テキストの改行は LF にそろえる
+* text=auto eol=lf
