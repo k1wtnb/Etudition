@@ -1,6 +1,6 @@
 {
   "files": {
-    "includes": ["**", "!dist", "!node_modules"]
+    "includes": ["**", "!dist", "!node_modules", "!s1-data"]
   },
   "formatter": {
     "indentStyle": "space",
