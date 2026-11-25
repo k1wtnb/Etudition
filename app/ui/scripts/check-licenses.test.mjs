@@ -18,6 +18,11 @@ describe("isAllowed（npm 側のライセンスの判定）", () => {
     );
     expect(isAllowed("MIT AND ISC", "a")).toBe(false);
   });
+  it("AND の式は、確かめ済みの部品と式が両方一致したときだけ通す", () => {
+    expect(isAllowed("(MIT AND Zlib)", "pako")).toBe(true);
+    expect(isAllowed("(MIT AND Zlib)", "other")).toBe(false);
+    expect(isAllowed("(MIT AND GPL-3.0-only)", "pako")).toBe(false);
+  });
   it("MPL-2.0 は例外の部品だけ通す", () => {
     expect(isAllowed("MPL-2.0", "lightningcss")).toBe(true);
     expect(isAllowed("MPL-2.0", "lightningcss-win32-x64-msvc")).toBe(true);
