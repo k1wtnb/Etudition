@@ -46,9 +46,10 @@ pub struct SoundingNote {
 pub struct Expansion {
     /// 展開した後の小節の列。
     pub measures: Vec<ExpandedMeasure>,
-    /// 鳴る音の列。並びは「位置、装飾音が先、音高の低い順、楽譜の順」（計画 2-3 の4）。
+    /// 鳴る音の列（お手本）。並びは「位置、音高の低い順、楽譜の順」（計画 2-3 の4、採点の仕様 v0 の SR-01）。
+    /// 装飾音も同じ位置の音として音高の順に並ぶ（S1 の「装飾音が先」は 1a-1 でやめた）。
     pub sounding: Vec<SoundingNote>,
-    /// 展開で扱えなかったこと。
+    /// 読み込み（[`Score::issues`]）と展開で扱えなかったこと。1つでもあれば [`check_playable`] が止める。
     pub issues: Vec<Issue>,
 }
 
@@ -57,9 +58,13 @@ pub struct Expansion {
 /// 扱う記号：前向き・後ろ向きの繰り返し記号（`times`）、かっこ（番号の一覧）、
 /// D.S.（`dalsegno` で `segno` へ戻る。1回だけ）と、D.S. の後の To Coda（`tocoda` で `coda` へ跳ぶ）。
 /// D.S. の後に出てくる繰り返し記号とかっこは扱わず、問題として返す（慣習が割れるため。試験の楽譜にない）。
-/// 展開の歩数が「小節の数 × 上限」を超えたら、止めて問題として返す（REQ-105）。
+/// 展開が同じ状態（小節、繰り返しの頭、何周目、D.S. の後か）に2度来たら、終わらない繰り返しとして止める（REQ-105）。
+/// 記号の指す回数どおりの繰り返しは、周の番号が変わるので同じ状態にならず、止めない。
+/// 念のため、歩数が [`MAX_STEPS`] を超えたときも止める（記号の回数が大きすぎる楽譜）。
+/// 展開した小節の数の上限（念のための上限。1小節 4 拍として、テンポ 60 で約 11 時間）。
+const MAX_STEPS: usize = 10_000;
+
 fn measure_order(score: &Score, issues: &mut Vec<Issue>) -> Vec<usize> {
-    const MAX_STEPS_PER_MEASURE: usize = 16;
     let ms = &score.measures;
     let n = ms.len();
     let mut order = Vec::new();
@@ -79,9 +84,14 @@ fn measure_order(score: &Score, issues: &mut Vec<Issue>) -> Vec<usize> {
     let find = |label: &String, f: fn(&crate::score::Measure) -> &Option<String>| {
         ms.iter().position(|m| f(m).as_ref() == Some(label))
     };
+    let mut seen = std::collections::BTreeSet::new();
     while i < n {
-        if order.len() > n * MAX_STEPS_PER_MEASURE {
-            issue(i, "repeat", "繰り返しの展開が終わらない");
+        if !seen.insert((i, repeat_start, round, jumped_back, after_ds)) {
+            issue(
+                i,
+                "repeat",
+                "繰り返しの展開が終わらない（同じ位置を記号の指す回数より多く通る）",
+            );
             break;
         }
         let m = &ms[i];
@@ -92,6 +102,14 @@ fn measure_order(score: &Score, issues: &mut Vec<Issue>) -> Vec<usize> {
                 "repeat",
                 "D.S. の後の繰り返し記号・かっこは扱わない（無視した）",
             );
+            if order.len() >= MAX_STEPS {
+                issue(
+                    i,
+                    "repeat",
+                    "繰り返しの展開が長すぎる（記号の回数が大きすぎる）",
+                );
+                break;
+            }
             order.push(i);
             i += 1;
             continue;
@@ -111,6 +129,15 @@ fn measure_order(score: &Score, issues: &mut Vec<Issue>) -> Vec<usize> {
             }
             i = j + 1;
             continue;
+        }
+        // 上限は、実際に小節を足すところでだけ見る（弾かないかっこを飛ばす経路では見ない）
+        if order.len() >= MAX_STEPS {
+            issue(
+                i,
+                "repeat",
+                "繰り返しの展開が長すぎる（記号の回数が大きすぎる）",
+            );
+            break;
         }
         order.push(i);
         if after_ds && let Some(label) = &m.tocoda {
@@ -148,8 +175,10 @@ fn measure_order(score: &Score, issues: &mut Vec<Issue>) -> Vec<usize> {
 }
 
 /// 繰り返しを展開し、鳴る音の列を作る。
+///
+/// 読み込みの問題（[`Score::issues`]）も、展開の問題の前に [`Expansion::issues`] へ写す。
 pub fn expand(score: &Score) -> Expansion {
-    let mut issues = Vec::new();
+    let mut issues = score.issues.clone();
     let order = measure_order(score, &mut issues);
 
     // 小節の頭の位置。弱起なら、1つ目の小節の頭を負にする
@@ -180,8 +209,8 @@ pub fn expand(score: &Score) -> Expansion {
     }
     events.sort_by_key(|&(start, k, _, j)| (start, k, j));
 
-    // 並びのキー（位置、装飾音でない、音高、楽譜の順）と鳴る音
-    let mut out: Vec<((Quarters, bool, i32, usize), SoundingNote)> = Vec::new();
+    // 並びのキー（位置、音高、楽譜の順。SR-01）と鳴る音
+    let mut out: Vec<((Quarters, i32, usize), SoundingNote)> = Vec::new();
     // タイの続きを待っている鳴る音（out の添字）
     let mut open: Vec<usize> = Vec::new();
     for (seq, &(start, _, em, j)) in events.iter().enumerate() {
@@ -212,7 +241,7 @@ pub fn expand(score: &Score) -> Expansion {
             open.push(out.len());
         }
         out.push((
-            (start, !n.is_grace, n.pitch, seq),
+            (start, n.pitch, seq),
             SoundingNote {
                 pitch: n.pitch,
                 start,
@@ -236,5 +265,25 @@ pub fn expand(score: &Score) -> Expansion {
         measures,
         sounding: out.into_iter().map(|(_, s)| s).collect(),
         issues,
+    }
+}
+
+/// 採点に使える楽譜かを確かめる（B07、REQ-105。境界の約束 B0 の 2-1）。
+///
+/// 読めない要素、パートが2つ以上、終わらない繰り返し、タイの食い違いなど、[`Expansion::issues`] が1つでもあるとき、
+/// またはお手本の音が0個のときは、理由の一覧を返して止める。黙って捨てて先へ進まない（AC-03、AC-45）。
+pub fn check_playable(expansion: &Expansion) -> Result<(), Vec<Issue>> {
+    let mut issues = expansion.issues.clone();
+    if expansion.sounding.is_empty() {
+        issues.push(Issue {
+            measure_index: None,
+            element: "note".into(),
+            detail: "音高のある音符が0個（採点できない）".into(),
+        });
+    }
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(issues)
     }
 }
