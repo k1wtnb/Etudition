@@ -6,6 +6,8 @@
 //!   合成の楽譜 T1 だけを受け付ける）。
 //! - `etudition-cli click-check <秒> <テンポ（四分音符／分）> <音量 0〜1> <出力.jsonl>`：cpal で 4/4 のクリックを鳴らし、
 //!   コールバックごとの時刻の組を1行ずつ書き、ずれと遅れの最小・平均・最大を出す（S2a）。音量 0 なら音を出さない。
+//! - `etudition-cli midi-log <秒> <出力.jsonl>`：MIDI の入力（最初の機器）を受け、`EngineClock` の時刻と midir の時刻と
+//!   バイト列を1行ずつ書く（F0 と S2b の受信を記録する最小のプログラム）。
 
 use std::process::ExitCode;
 
@@ -21,6 +23,11 @@ fn main() -> ExitCode {
     {
         return make_errors(path, std::path::Path::new(out));
     }
+    if let [cmd, secs, out] = args.as_slice()
+        && cmd == "midi-log"
+    {
+        return midi_log(secs, std::path::Path::new(out));
+    }
     if let [cmd, secs, bpm, volume, out] = args.as_slice()
         && cmd == "click-check"
     {
@@ -30,7 +37,7 @@ fn main() -> ExitCode {
         [cmd, path] if cmd == "s1" || cmd == "s1-xml" => (cmd.as_str(), path),
         _ => {
             eprintln!(
-                "etudition-cli {}\n使い方: etudition-cli s1 <楽譜のパス> | etudition-cli s1-xml <楽譜のパス> | etudition-cli make-errors <楽譜のパス> <出力のフォルダ> | etudition-cli click-check <秒> <テンポ> <音量 0〜1> <出力.jsonl>",
+                "etudition-cli {}\n使い方: etudition-cli s1 <楽譜のパス> | etudition-cli s1-xml <楽譜のパス> | etudition-cli make-errors <楽譜のパス> <出力のフォルダ> | etudition-cli click-check <秒> <テンポ> <音量 0〜1> <出力.jsonl> | etudition-cli midi-log <秒> <出力.jsonl>",
                 env!("CARGO_PKG_VERSION")
             );
             return ExitCode::from(2);
@@ -179,6 +186,84 @@ fn click_check(secs: &str, bpm: &str, volume: &str, out: &std::path::Path) -> Ex
     }
     // 欠けたクリックや出力先の喪失があれば、失敗で終える（測り直しが要ることを示す）
     if !etudition_cli::click_check::usable(lost, sum.count, plan.clicks.len(), audio.complete()) {
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
+/// F0・S2b：MIDI の入力を `secs` 秒受け、1行ずつ記録する。
+fn midi_log(secs: &str, out: &std::path::Path) -> ExitCode {
+    use etudition_engine::clock::EngineClock;
+    use etudition_engine::input::{InputMsg, InputSink, MidiInput, MidirInput};
+    use std::fmt::Write as _;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::{Duration, Instant};
+
+    let Ok(secs) = secs.parse::<u64>() else {
+        eprintln!("秒は正の整数");
+        return ExitCode::from(2);
+    };
+    let (tx, mut rx) = etudition_engine::rtrb::RingBuffer::new(8192);
+    let overflow = Arc::new(AtomicU32::new(0));
+    let mut input = MidirInput::new();
+    if let Err(e) = input.open(
+        EngineClock::new(Instant::now()),
+        InputSink {
+            producer: tx,
+            overflow: Arc::clone(&overflow),
+        },
+    ) {
+        eprintln!("受けられない: {e}");
+        return ExitCode::FAILURE;
+    }
+    println!(
+        "受ける機器：{}（{secs} 秒）",
+        input.port_name.as_deref().unwrap_or("?")
+    );
+    let until = Instant::now() + Duration::from_secs(secs);
+    let mut lines = String::new();
+    let (mut count, mut disconnected) = (0usize, false);
+    while Instant::now() < until && !disconnected {
+        while let Ok(m) = rx.pop() {
+            match m {
+                InputMsg::Midi(r) => {
+                    let _ = writeln!(lines, "{}", etudition_cli::midi_log::raw_json(&r));
+                    count += 1;
+                }
+                InputMsg::Disconnected => disconnected = true,
+                InputMsg::Finished => {}
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // 受付を締めてから、中継が渡した残りも書く（終わり際の Note Off を落とさない。Astra の監査）
+    input.close();
+    while let Ok(m) = rx.pop() {
+        match m {
+            InputMsg::Midi(r) => {
+                let _ = writeln!(lines, "{}", etudition_cli::midi_log::raw_json(&r));
+                count += 1;
+            }
+            InputMsg::Disconnected => disconnected = true,
+            InputMsg::Finished => {}
+        }
+    }
+    if let Err(e) = std::fs::write(out, lines) {
+        eprintln!("{} を書けない: {e}", out.display());
+        return ExitCode::FAILURE;
+    }
+    println!(
+        "受けたメッセージ {count} 個。あふれ {} 件。切断：{}",
+        overflow.load(Ordering::Relaxed),
+        if disconnected {
+            "あった"
+        } else {
+            "なかった"
+        }
+    );
+    // あふれ（取りこぼし）があれば、失敗で終える（測り直しが要ることを示す）
+    if overflow.load(Ordering::Relaxed) > 0 {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS

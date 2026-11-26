@@ -554,6 +554,105 @@ fn stop_then_disconnect_writes_nothing() {
     assert!(!dir.exists());
 }
 
+/// 最後のメッセージを、`request_flush`（受けた分を渡し切る要求）で初めて渡す試験用の入力（中継が遅れて渡す分を作る。Astra の監査）。
+/// 渡し終えたと答えるのは、2回目に聞かれたとき（練習のスレッドが待つ間も列を読むことを通す）。
+struct HeldLastInput {
+    msgs: Vec<etudition_engine::input::InputMsg>,
+    producer: Option<etudition_engine::rtrb::Producer<etudition_engine::input::InputMsg>>,
+    asked: std::sync::atomic::AtomicU32,
+}
+
+impl etudition_engine::input::MidiInput for HeldLastInput {
+    fn open(
+        &mut self,
+        _clock: etudition_engine::clock::EngineClock,
+        mut sink: etudition_engine::input::InputSink,
+    ) -> Result<(), StartError> {
+        let last = self.msgs.len() - 1;
+        for m in self.msgs.drain(..last) {
+            sink.producer.push(m).unwrap();
+        }
+        self.producer = Some(sink.producer);
+        Ok(())
+    }
+    fn request_flush(&mut self) -> u64 {
+        if let Some(p) = self.producer.as_mut() {
+            for m in self.msgs.drain(..) {
+                p.push(m).unwrap();
+            }
+        }
+        1
+    }
+    fn flushed(&self, _ticket: u64) -> bool {
+        self.asked
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            >= 1
+    }
+    fn close(&mut self) {}
+}
+
+/// 時計で進む回は、終わりが決まりそうになったら受けた分を渡し切らせ、中継が遅れて渡した音（終わり際のノートオフ）も採点と記録に入れる。
+#[test]
+fn live_mode_takes_what_arrives_when_input_flushes() {
+    let dir = tmp("live-held");
+    let t = timing(600, 0);
+    let e = expansion(TIE);
+    let msgs = FileInput::new(&as_written_midi(&e, false), &e, &t)
+        .unwrap()
+        .messages()
+        .to_vec();
+    let last_ns = match msgs.last() {
+        Some(etudition_engine::input::InputMsg::Midi(r)) => r.at_ns,
+        m => panic!("最後はノートのはず: {m:?}"),
+    };
+    let input = HeldLastInput {
+        msgs,
+        producer: None,
+        asked: std::sync::atomic::AtomicU32::new(0),
+    };
+    let open = open_session(setup_for(TIE, t, &dir.join("run")), Box::new(input), None).unwrap();
+    let outcome = open.run(RunMode::Live, &|_| {}, &AtomicBool::new(false));
+    let SessionOutcome::Scored(res) = outcome else {
+        panic!("採点されるはず: {outcome:?}");
+    };
+    let items = res.items.unwrap();
+    assert_eq!(items.duration.errors, 0, "終わり際のノートオフも採点に入る");
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("run").join("result.json")).unwrap())
+            .unwrap();
+    let events = json["events"].as_array().unwrap();
+    assert!(
+        events.iter().any(|e| e["raw_ns"] == last_ns),
+        "記録にも入る"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 渡し切らせたときに切断が届いたら、その回は切断で無効にする（採点しない。Astra の監査）。
+#[test]
+fn live_mode_turns_a_late_disconnect_into_invalid() {
+    let dir = tmp("live-held-disconnect");
+    let t = timing(600, 0);
+    let e = expansion(TIE);
+    let mut msgs = FileInput::new(&as_written_midi(&e, false), &e, &t)
+        .unwrap()
+        .messages()
+        .to_vec();
+    msgs.push(etudition_engine::input::InputMsg::Disconnected);
+    let input = HeldLastInput {
+        msgs,
+        producer: None,
+        asked: std::sync::atomic::AtomicU32::new(0),
+    };
+    let open = open_session(setup_for(TIE, t, &dir.join("run")), Box::new(input), None).unwrap();
+    let outcome = open.run(RunMode::Live, &|_| {}, &AtomicBool::new(false));
+    assert_eq!(
+        outcome,
+        SessionOutcome::Invalid(InvalidReason::Disconnected)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn setup_for(score: &[u8], t: Timing, dir: &Path) -> PracticeSetup {
     PracticeSetup {
         expansion: expansion(score),
@@ -687,6 +786,81 @@ fn lost_audio_output_makes_the_run_invalid() {
     let json: serde_json::Value =
         serde_json::from_slice(&std::fs::read(files.json.as_ref().unwrap()).unwrap()).unwrap();
     assert_eq!(json["invalid_reason"], "音声の出力先がなくなった");
+    assert!(json["result"].is_null());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 実機の入力と同じ投入（`input::accept`）で、小さい内側の列を本当にあふれさせてから、
+/// 楽譜どおりの音を送る試験用の入力（REQ-104 のあふれを起こす）。
+struct OverflowInput {
+    inner: FileInput,
+    /// 内側の列の長さ（これを超えて入れた分があふれる）。
+    capacity: usize,
+    /// 入れようとするメッセージの数。
+    sent: usize,
+}
+
+impl etudition_engine::input::MidiInput for OverflowInput {
+    fn open(
+        &mut self,
+        clock: etudition_engine::clock::EngineClock,
+        sink: etudition_engine::input::InputSink,
+    ) -> Result<(), StartError> {
+        let (mut tx, _rx) = etudition_engine::rtrb::RingBuffer::new(self.capacity);
+        for n in 0..self.sent {
+            let r = etudition_engine::input::raw_midi(
+                0,
+                0,
+                &[0x90, 60, u8::try_from(n % 100).unwrap() + 1],
+            )
+            .unwrap();
+            etudition_engine::input::accept(
+                &mut tx,
+                &sink.overflow,
+                etudition_engine::input::InputMsg::Midi(r),
+            );
+        }
+        self.inner.open(clock, sink)
+    }
+    fn close(&mut self) {
+        self.inner.close();
+    }
+}
+
+/// AC-44：受け渡しのあふれがあると、その回は無効になり、点数と合否を出さず、`result.json` にあふれの数と理由が書かれる。
+#[test]
+fn overflow_makes_the_run_invalid() {
+    let dir = tmp("overflow");
+    let t = timing(60, 4 * S);
+    let e = expansion(TIE);
+    let input = OverflowInput {
+        inner: FileInput::new(&as_written_midi(&e, false), &e, &t).unwrap(),
+        capacity: 2,
+        sent: 5,
+    };
+    let open = open_session(setup_for(TIE, t, &dir.join("run")), Box::new(input), None).unwrap();
+    let seen = Mutex::new(Vec::new());
+    let outcome = open.run(
+        RunMode::Feed,
+        &|ev| seen.lock().unwrap().push(ev),
+        &AtomicBool::new(false),
+    );
+    assert_eq!(
+        outcome,
+        SessionOutcome::Invalid(InvalidReason::Overflow { count: 3 })
+    );
+    let events = seen.into_inner().unwrap();
+    let Some(EngineEvent::Invalid {
+        record: RecordStatus::Written(files),
+        ..
+    }) = events.last()
+    else {
+        panic!("無効の回を記録したはず: {:?}", events.last());
+    };
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(files.json.as_ref().unwrap()).unwrap()).unwrap();
+    assert_eq!(json["invalid_reason"], "受信のあふれ（3 件）");
+    assert_eq!(json["overflow_count"], 3);
     assert!(json["result"].is_null());
     let _ = std::fs::remove_dir_all(&dir);
 }

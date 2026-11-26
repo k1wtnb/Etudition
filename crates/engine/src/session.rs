@@ -243,6 +243,12 @@ impl OpenSession {
         outcome
     }
 
+    /// あふれの数が1以上なら、その数で無効にする理由（REQ-104。B0 の4章の手順5）。
+    fn overflowed(&self) -> Option<InvalidReason> {
+        let count = self.overflow.load(Ordering::Relaxed);
+        (count > 0).then_some(InvalidReason::Overflow { count })
+    }
+
     /// 音声の列を空にする。組は覚え、出力先を失っていたら `true`。
     fn drain_audio(&mut self, mut on_stamp: impl FnMut(&ClickStamp, bool)) -> bool {
         let mut lost = false;
@@ -289,6 +295,10 @@ impl OpenSession {
         loop {
             if stop.load(Ordering::Relaxed) {
                 return SessionOutcome::Cancelled;
+            }
+            // あふれたら `Finished` を待たずに手順5へ（無効にする）
+            if let Some(why) = self.overflowed() {
+                return self.invalid(why, &raw, notify, stop);
             }
             match self.consumer.pop() {
                 Ok(InputMsg::Midi(r)) => raw.push(r),
@@ -370,6 +380,9 @@ impl OpenSession {
         if stop.load(Ordering::Relaxed) {
             return SessionOutcome::Cancelled;
         }
+        if let Some(why) = self.overflowed() {
+            return self.invalid(why, &raw, notify, stop);
+        }
         self.finish(end, &raw, notify)
     }
 
@@ -380,22 +393,8 @@ impl OpenSession {
             if stop.load(Ordering::Relaxed) {
                 return SessionOutcome::Cancelled;
             }
-            while let Ok(m) = self.consumer.pop() {
-                match m {
-                    InputMsg::Midi(r) => {
-                        if r.bytes[0] & 0xf0 == 0x90 && r.bytes[2] != 0 {
-                            notify(EngineEvent::NoteReceived {
-                                note: r.bytes[1] & 0x7f,
-                                at_ns: r.at_ns - self.setup.correction_ns,
-                            });
-                        }
-                        raw.push(r);
-                    }
-                    InputMsg::Disconnected => {
-                        return self.invalid(InvalidReason::Disconnected, &raw, notify, stop);
-                    }
-                    InputMsg::Finished => {}
-                }
+            if self.take_input(&mut raw, notify) {
+                return self.invalid(InvalidReason::Disconnected, &raw, notify, stop);
             }
             if self.drain_audio(|s, count_in| {
                 notify(EngineEvent::Click {
@@ -418,14 +417,64 @@ impl OpenSession {
                 }
                 marked_until = until;
             }
-            if let Some(end) = end {
+            if end.is_some() {
                 if stop.load(Ordering::Relaxed) {
                     return SessionOutcome::Cancelled;
+                }
+                // 終わりを決める前に、`now` までに受けた分を中継に渡し切らせて取り込む（閉じない。Astra の監査）。
+                // 取り込んだ音で終わりが成り立たなくなれば、入力を開いたまま続ける。
+                // `now` より後の音は、採点と記録の終わりの時刻で外れる
+                // 待つ間も列を読む（送り先が満杯でも中継が渡し切れるように）。終了の要求も見る
+                let ticket = self.input.request_flush();
+                loop {
+                    let done = self.input.flushed(ticket);
+                    if self.take_input(&mut raw, notify) {
+                        return self.invalid(InvalidReason::Disconnected, &raw, notify, stop);
+                    }
+                    if done {
+                        break;
+                    }
+                    if stop.load(Ordering::Relaxed) {
+                        return SessionOutcome::Cancelled;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                let perf = to_perf(&raw, self.setup.correction_ns);
+                let Some(end) = decide_end(&self.input(&perf), now) else {
+                    std::thread::sleep(ENGINE_TICK);
+                    continue;
+                };
+                if stop.load(Ordering::Relaxed) {
+                    return SessionOutcome::Cancelled;
+                }
+                // 採点の前にあふれの数を読む（B0 の4章の手順5）
+                if let Some(why) = self.overflowed() {
+                    return self.invalid(why, &raw, notify, stop);
                 }
                 return self.finish(end, &raw, notify);
             }
             std::thread::sleep(ENGINE_TICK);
         }
+    }
+
+    /// 列にある入力を読む。ノートオンは受けたことを知らせる。切断の知らせがあれば `true`。
+    fn take_input(&mut self, raw: &mut Vec<RawMidi>, notify: &dyn Fn(EngineEvent)) -> bool {
+        while let Ok(m) = self.consumer.pop() {
+            match m {
+                InputMsg::Midi(r) => {
+                    if r.bytes[0] & 0xf0 == 0x90 && r.bytes[2] != 0 {
+                        notify(EngineEvent::NoteReceived {
+                            note: r.bytes[1] & 0x7f,
+                            at_ns: r.at_ns - self.setup.correction_ns,
+                        });
+                    }
+                    raw.push(r);
+                }
+                InputMsg::Disconnected => return true,
+                InputMsg::Finished => {}
+            }
+        }
+        false
     }
 
     /// `result.json` の中身を作る（回の終わりより後に受けた入力は入れない）。
@@ -435,6 +484,7 @@ impl OpenSession {
         until_ns: i64,
         result: Option<crate::record::ResultRecord>,
         invalid: Option<InvalidReason>,
+        overflow_count: u32,
     ) -> RunRecord {
         let c = self.setup.correction_ns;
         RunRecord {
@@ -470,7 +520,7 @@ impl OpenSession {
                 .collect(),
             result,
             invalid_reason: invalid.map(InvalidReason::text),
-            overflow_count: self.overflow.load(Ordering::Relaxed),
+            overflow_count,
         }
     }
 
@@ -480,7 +530,8 @@ impl OpenSession {
         let result = score_run(&self.input(&perf), end);
         // 止まった回も2つの記録を書く（Q-51。人間の回答 2026-11-26）。止まった回の結果は点数と合否を持たない
         let kept: Vec<PerfEvent> = perf.into_iter().filter(|e| e.t_ns <= end.at_ns).collect();
-        let rec = self.record(raw, end.at_ns, Some((&result).into()), None);
+        // あふれの数は手順5で読んだもの（0）を使う。ここで読み直さない（Astra の監査）
+        let rec = self.record(raw, end.at_ns, Some((&result).into()), None, 0);
         let record = status(write_run(&self.setup.record_dir, Some(&rec), Some(&kept)));
         notify(EngineEvent::Ended {
             result: result.clone(),
@@ -501,7 +552,12 @@ impl OpenSession {
         if stop.load(Ordering::Relaxed) {
             return SessionOutcome::Cancelled;
         }
-        let rec = self.record(raw, i64::MAX, None, Some(reason));
+        // あふれで無効にした回は、判定に使った数を記録する。ほかの理由の回は今の数
+        let count = match reason {
+            InvalidReason::Overflow { count } => count,
+            _ => self.overflow.load(Ordering::Relaxed),
+        };
+        let rec = self.record(raw, i64::MAX, None, Some(reason), count);
         let perf = to_perf(raw, self.setup.correction_ns);
         let record = status(write_run(&self.setup.record_dir, Some(&rec), Some(&perf)));
         notify(EngineEvent::Invalid { reason, record });

@@ -175,10 +175,35 @@ pub fn load_score(path: String, state: tauri::State<'_, AppState>) -> Result<Sco
     Ok(view)
 }
 
-/// 練習を始める。実機の MIDI の入力は 1a-8 で足すので、今は「MIDI 機器がない」を返す（REQ-103、10-1 の最後の行）。
+/// 練習を始める（1a-8）：MIDI 機器（midir）と音声の出力（cpal のクリック）を開き、時計で進める（`RunMode::Live`）。
+/// 機器がなければ始めず、理由を返す（REQ-103、REQ-107、10-1 の最後の行。ファイルは作らない）。
 #[tauri::command]
-pub fn start_practice(_tempo: TempoView, _events: Channel<LiveEvent>) -> Result<(), String> {
-    Err(StartError::NoMidiDevice.to_string())
+pub fn start_practice<R: Runtime>(
+    tempo: TempoView,
+    events: Channel<LiveEvent>,
+    app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let loaded = lock(&state.loaded)?.clone().ok_or("先に楽譜を読む")?;
+    let timing = timing_of(tempo, &loaded)?;
+    let root = state.record_root_or(|| app.path().app_data_dir().map_err(|e| e.to_string()))?;
+    let stop = begin(&state)?;
+    let input = Box::new(etudition_engine::input::MidirInput::new());
+    let audio = Box::new(etudition_engine::click::CpalOut::new(1.0));
+    let open = match open(&loaded, timing, input, Some(audio), record_dir(&root)) {
+        Ok(o) => o,
+        Err(e) => {
+            end(&app);
+            return Err(e.to_string());
+        }
+    };
+    std::thread::spawn(move || {
+        run(open, RunMode::Live, &stop, &|ev| {
+            let _ = events.send(ev);
+        });
+        end(&app);
+    });
+    Ok(())
 }
 
 /// 練習を終える（使う人が閉じた回。記録しない。仕様書 10-1）。進んでいる回がなければ何もしない。
@@ -302,6 +327,43 @@ mod tests {
             "{err}"
         );
         assert!(invoke(&w, "stop_practice", serde_json::json!({})).is_ok());
+    }
+
+    /// 1a-8：実際の練習は、楽譜を読んでから始める。MIDI 機器がなければ始めず（AC-43。REQ-103）、回の印を外す。
+    /// 機器がない側だけを確かめる。機器がないと分かっている Dev Container（Linux）だけで動かす
+    /// （F767 をつないだ Windows では前提が崩れるため。Astra の監査）
+    #[test]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        ignore = "MIDI 機器がない環境（Dev Container）だけで動かす"
+    )]
+    fn start_practice_needs_a_score_and_a_midi_device() {
+        let (app, _w) = app();
+        let base = std::env::temp_dir().join(format!("etudition-start-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        app.state::<AppState>()
+            .set_record_root(Some(base.clone()))
+            .unwrap();
+        let channel = || Channel::<LiveEvent>::new(|_| Ok(()));
+        let tempo = TempoView { num: 60, den: 1 };
+        let err = start_practice(tempo, channel(), app.handle().clone(), app.state())
+            .expect_err("楽譜がないので始めない");
+        assert!(err.contains("先に楽譜を読む"), "{err}");
+        let score = base.join("t1.musicxml");
+        std::fs::write(&score, T1).unwrap();
+        load_score(score.display().to_string(), app.state()).unwrap();
+        let err = start_practice(tempo, channel(), app.handle().clone(), app.state())
+            .expect_err("MIDI 機器がないので始めない");
+        assert!(err.contains("MIDI 機器がない"), "{err}");
+        assert!(app.state::<AppState>().running.lock().unwrap().is_none());
+        // 記録のフォルダは作らない
+        assert!(
+            std::fs::read_dir(&base)
+                .unwrap()
+                .all(|e| e.unwrap().file_name() == "t1.musicxml")
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// 計画 2-3 の3：画面の呼び出し関数（commands.ts）が、コマンドの名前で呼ぶ。
