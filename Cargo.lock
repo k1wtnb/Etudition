@@ -813,6 +813,9 @@ dependencies = [
 name = "etudition-app"
 version = "0.1.0"
 dependencies = [
+ "etudition-core",
+ "etudition-engine",
+ "midly",
  "serde",
  "serde_json",
  "tauri",
