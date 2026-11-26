@@ -55,20 +55,29 @@ $failed = 0
 try {
     # 区切り直し：機器に途中まで届いた行が残っていても、NUL を足して無効にしてから改行する
     # （ファームは NUL を含む行を実行せず err を返す。何も残っていなければ NUL だけの行になり、同じく err）。
-    # その後 ping を送り、pong が来るまでの返事（err や古い ok）を読み捨てる
+    # その後 ping を送る。返事は「err の後にすぐ pong」の順でなければならない。err より前の返事
+    # （前の回の遅れた ok や pong）は読み捨て、err の次が pong でなければ、その回は失敗として止める
     $serial.Write("`0`n")
     $serial.Write("ping`n")
     $synced = $false
+    $sawErr = $false
     $syncClock = [System.Diagnostics.Stopwatch]::StartNew()
     while (-not $synced -and $syncClock.ElapsedMilliseconds -lt 1000) {
         try {
-            if ($serial.ReadLine().TrimEnd("`r") -eq "pong") { $synced = $true }
+            $reply = $serial.ReadLine().TrimEnd("`r")
         } catch [System.TimeoutException] {
+            break
+        }
+        if (-not $sawErr) {
+            if ($reply -eq "err") { $sawErr = $true }
+        } elseif ($reply -eq "pong") {
+            $synced = $true
+        } else {
             break
         }
     }
     if (-not $synced) {
-        [Console]::Error.WriteLine("区切り直しの ping に pong が来ない（ポート、配線、ファームを確かめる）")
+        [Console]::Error.WriteLine("区切り直しの返事が err、pong の順で来ない（もう一度実行する。続けば、ポート、配線、ファームを確かめる）")
         exit 1
     }
 
