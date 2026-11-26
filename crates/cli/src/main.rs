@@ -105,6 +105,7 @@ fn make_errors(path: &str, out: &std::path::Path) -> ExitCode {
 fn click_check(secs: &str, bpm: &str, volume: &str, out: &std::path::Path) -> ExitCode {
     use etudition_engine::click::{AudioMsg, AudioOut, CpalOut};
     use etudition_engine::clock::EngineClock;
+    use std::fmt::Write as _;
     use std::time::{Duration, Instant};
 
     let (Ok(secs), Ok(bpm), Ok(volume)) = (
@@ -120,9 +121,12 @@ fn click_check(secs: &str, bpm: &str, volume: &str, out: &std::path::Path) -> Ex
         return ExitCode::from(2);
     }
     let interval_ns = 60_000_000_000 / i64::from(bpm);
-    let plan = etudition_cli::click_check::plan(secs * bpm / 60, interval_ns);
+    let plan = etudition_cli::click_check::plan(
+        etudition_cli::click_check::click_count(secs, bpm),
+        interval_ns,
+    );
     let (tx, mut rx) = etudition_engine::rtrb::RingBuffer::new(8192);
-    let mut audio = CpalOut::new(volume);
+    let mut audio = CpalOut::new(volume).with_callback_log();
     let lead = Duration::from_millis(300);
     if let Err(e) = audio.start(EngineClock::new(Instant::now() + lead), &plan, tx) {
         eprintln!("鳴らせない: {e}");
@@ -131,30 +135,28 @@ fn click_check(secs: &str, bpm: &str, volume: &str, out: &std::path::Path) -> Ex
     let until =
         Instant::now() + lead + Duration::from_secs(u64::from(secs)) + Duration::from_millis(500);
     let mut stamps = Vec::new();
+    let mut lines = String::new();
     let mut lost = false;
+    let mut take = |m: AudioMsg| match m {
+        AudioMsg::Stamp(s) => {
+            let _ = writeln!(lines, "{}", etudition_cli::click_check::stamp_json(&s));
+            stamps.push(s);
+        }
+        AudioMsg::Callback(l) => {
+            let _ = writeln!(lines, "{}", etudition_cli::click_check::callback_json(&l));
+        }
+        AudioMsg::Lost => lost = true,
+    };
     while Instant::now() < until {
         while let Ok(m) = rx.pop() {
-            match m {
-                AudioMsg::Stamp(s) => stamps.push(s),
-                AudioMsg::Lost => lost = true,
-            }
+            take(m);
         }
         std::thread::sleep(Duration::from_millis(20));
     }
     audio.stop();
-    while let Ok(AudioMsg::Stamp(s)) = rx.pop() {
-        stamps.push(s);
+    while let Ok(m) = rx.pop() {
+        take(m);
     }
-    let lines: String = stamps
-        .iter()
-        .map(|s| {
-            format!(
-                "{}
-",
-                etudition_cli::click_check::stamp_json(s)
-            )
-        })
-        .collect();
     if let Err(e) = std::fs::write(out, lines) {
         eprintln!("{} を書けない: {e}", out.display());
         return ExitCode::FAILURE;
@@ -172,6 +174,10 @@ fn click_check(secs: &str, bpm: &str, volume: &str, out: &std::path::Path) -> Ex
         ms(sum.latency_ns.2),
         if lost { "はい" } else { "いいえ" }
     );
+    // 欠けたクリックや出力先の喪失があれば、失敗で終える（測り直しが要ることを示す）
+    if lost || sum.count < plan.clicks.len() {
+        return ExitCode::FAILURE;
+    }
     ExitCode::SUCCESS
 }
 

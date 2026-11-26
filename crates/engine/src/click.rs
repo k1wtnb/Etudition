@@ -108,13 +108,36 @@ pub struct ClickStamp {
     pub at_ns: i64,
 }
 
+/// 1回のコールバックの時刻の組（S2a の確かめだけで送る。`CpalOut::with_callback_log`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CallbackLog {
+    /// コールバックを呼んだときの `EngineClock` の時刻（ns）。
+    pub engine_ns: i64,
+    /// cpal の時刻。
+    pub cpal_ts: CpalTs,
+    /// バッファのフレームの数。
+    pub frames: u64,
+}
+
 /// 音声から練習のスレッドへ送るもの。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioMsg {
     /// クリックを入れた。
     Stamp(ClickStamp),
+    /// コールバックの時刻の組（S2a の確かめだけ。練習のスレッドは読み捨てる）。
+    Callback(CallbackLog),
     /// 出力先を失った（REQ-107）。
     Lost,
+}
+
+/// 出力先を失ったとみなす誤りか。装置や裏側がなくなったときだけで、一時的な途切れ（Xrun）や経路の切り替えでは無効にしない。
+pub fn is_output_lost(kind: cpal::ErrorKind) -> bool {
+    matches!(
+        kind,
+        cpal::ErrorKind::DeviceNotAvailable
+            | cpal::ErrorKind::HostUnavailable
+            | cpal::ErrorKind::StreamInvalidated
+    )
 }
 
 /// コールバックを呼んだときの `EngineClock` の時刻と cpal の時刻の組から、バッファの `frame` 番目が鳴る時刻を求める
@@ -187,6 +210,8 @@ impl AudioOut for FakeOut {
         if self.missing {
             return Err(StartError::NoAudioOutput);
         }
+        // 始めたときに全部を送る。列に入りきらなければ、捨てずに始められないことにする（喪失を取りこぼさないため）
+        let full = || StartError::Other("クリックの列に入りきらない".into());
         let n = self.lost_after.unwrap_or(plan.clicks.len());
         for c in plan.clicks.iter().take(n) {
             let engine_cb = c.scheduled_ns - self.latency_ns;
@@ -194,15 +219,16 @@ impl AudioOut for FakeOut {
                 callback_ns: self.cpal_base_ns + engine_cb,
                 playback_ns: self.cpal_base_ns + engine_cb + self.latency_ns,
             };
-            let _ = sink.push(AudioMsg::Stamp(ClickStamp {
+            sink.push(AudioMsg::Stamp(ClickStamp {
                 index: c.index,
                 scheduled_ns: c.scheduled_ns,
                 cpal_ts,
                 at_ns: placed_at(engine_cb, cpal_ts, 0, 48_000),
-            }));
+            }))
+            .map_err(|_| full())?;
         }
         if self.lost_after.is_some() {
-            let _ = sink.push(AudioMsg::Lost);
+            sink.push(AudioMsg::Lost).map_err(|_| full())?;
         }
         Ok(())
     }
@@ -218,6 +244,7 @@ const RELAY_TICK: Duration = Duration::from_millis(5);
 /// cpal で鳴らす出力（実機）。ストリームは自分のスレッドが持つ（`Stream` が `Send` でない裏側があるため）。
 pub struct CpalOut {
     volume: f32,
+    log_callbacks: bool,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
@@ -227,11 +254,21 @@ impl CpalOut {
     pub fn new(volume: f32) -> CpalOut {
         CpalOut {
             volume: volume.clamp(0.0, 1.0),
+            log_callbacks: false,
             stop: Arc::new(AtomicBool::new(false)),
             worker: None,
         }
     }
+
+    /// コールバックごとの時刻の組も送る（S2a の確かめ用。練習では使わない）。
+    pub fn with_callback_log(mut self) -> CpalOut {
+        self.log_callbacks = true;
+        self
+    }
 }
+
+/// 最初のコールバックを待つ長さ。
+const FIRST_CALLBACK_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// クリックの音の1つのサンプル（強さで高さと大きさを変え、短く減衰させる）。
 fn click_sample(level: u8, t: f32) -> f32 {
@@ -250,6 +287,8 @@ struct Voice {
     /// 鳴っているクリックの強さと、そのクリックの何フレーム目か。
     playing: Option<(u8, u64)>,
     click_frames: u64,
+    /// 同じフレームで2つ以上のクリックを鳴らし始めた（遅れて前のクリックを逃した）。
+    overlapped: bool,
 }
 
 impl Voice {
@@ -266,9 +305,14 @@ impl Voice {
         for f in 0..frames {
             let t = placed_at(engine_ns, ts, f, sample_rate);
             // 予定時刻を過ぎたクリックは、いまのフレームで鳴らし始める（遅れて入れたものも捨てない）
+            let mut started = 0;
             while let Some(c) = self.clicks.get(self.next) {
                 if c.scheduled_ns > t {
                     break;
+                }
+                started += 1;
+                if started > 1 {
+                    self.overlapped = true;
                 }
                 stamp(ClickStamp {
                     index: c.index,
@@ -300,6 +344,18 @@ fn stream_ns(i: cpal::StreamInstant) -> i64 {
 }
 
 /// 型 `T` のサンプルでストリームを作る。
+/// コールバックと出力の状態を、ストリームのスレッドへ知らせる印。
+#[derive(Clone)]
+struct Flags {
+    lost: Arc<AtomicBool>,
+    /// 最初のコールバックが済んだ。
+    called: Arc<AtomicBool>,
+    /// 同じフレームで2つ以上のクリックを鳴らし始めた。
+    overlapped: Arc<AtomicBool>,
+}
+
+/// 型 `T` のサンプルでストリームを作る。
+#[allow(clippy::too_many_arguments)]
 fn build<T: SizedSample + FromSample<f32>>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -307,8 +363,10 @@ fn build<T: SizedSample + FromSample<f32>>(
     mut voice: Voice,
     volume: f32,
     mut stamps: rtrb::Producer<ClickStamp>,
-    lost: Arc<AtomicBool>,
+    mut logs: Option<rtrb::Producer<CallbackLog>>,
+    flags: Flags,
 ) -> Result<cpal::Stream, cpal::Error> {
+    let lost = Arc::clone(&flags.lost);
     let channels = usize::from(config.channels.max(1));
     let sample_rate = config.sample_rate;
     device.build_output_stream(
@@ -321,6 +379,13 @@ fn build<T: SizedSample + FromSample<f32>>(
                 playback_ns: stream_ns(t.playback),
             };
             let frames = (data.len() / channels) as u64;
+            if let Some(l) = logs.as_mut() {
+                let _ = l.push(CallbackLog {
+                    engine_ns,
+                    cpal_ts: ts,
+                    frames,
+                });
+            }
             voice.fill(
                 frames,
                 engine_ns,
@@ -337,8 +402,16 @@ fn build<T: SizedSample + FromSample<f32>>(
                     let _ = stamps.push(s);
                 },
             );
+            if voice.overlapped {
+                flags.overlapped.store(true, Ordering::Relaxed);
+            }
+            flags.called.store(true, Ordering::Relaxed);
         },
-        move |_e| lost.store(true, Ordering::Relaxed),
+        move |e| {
+            if is_output_lost(e.kind()) {
+                lost.store(true, Ordering::Relaxed);
+            }
+        },
         None,
     )
 }
@@ -352,6 +425,7 @@ impl AudioOut for CpalOut {
     ) -> Result<(), StartError> {
         let clicks = plan.clicks.clone();
         let volume = self.volume;
+        let log_callbacks = self.log_callbacks;
         let stop = Arc::clone(&self.stop);
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), StartError>>();
         self.worker = Some(std::thread::spawn(move || {
@@ -377,9 +451,16 @@ impl AudioOut for CpalOut {
                 next: 0,
                 playing: None,
                 click_frames,
+                overlapped: false,
             };
-            let lost = Arc::new(AtomicBool::new(false));
+            let flags = Flags {
+                lost: Arc::new(AtomicBool::new(false)),
+                called: Arc::new(AtomicBool::new(false)),
+                overlapped: Arc::new(AtomicBool::new(false)),
+            };
             let (stamp_tx, mut stamp_rx) = rtrb::RingBuffer::new(1024);
+            let (log_tx, mut log_rx) = rtrb::RingBuffer::new(4096);
+            let log_tx = log_callbacks.then_some(log_tx);
             let built = match supported.sample_format() {
                 cpal::SampleFormat::F32 => build::<f32>(
                     &device,
@@ -388,7 +469,8 @@ impl AudioOut for CpalOut {
                     voice,
                     volume,
                     stamp_tx,
-                    Arc::clone(&lost),
+                    log_tx,
+                    flags.clone(),
                 ),
                 cpal::SampleFormat::I16 => build::<i16>(
                     &device,
@@ -397,7 +479,8 @@ impl AudioOut for CpalOut {
                     voice,
                     volume,
                     stamp_tx,
-                    Arc::clone(&lost),
+                    log_tx,
+                    flags.clone(),
                 ),
                 other => {
                     let _ = ready_tx.send(Err(StartError::Other(format!(
@@ -415,16 +498,43 @@ impl AudioOut for CpalOut {
                     return;
                 }
             };
+            // 最初のコールバックを待つ。前カウントの初めのクリックを2つ以上逃して始まったら、普通の回として進めない（Astra の監査）
+            let waited = Instant::now();
+            while !flags.called.load(Ordering::Relaxed) {
+                if waited.elapsed() > FIRST_CALLBACK_TIMEOUT {
+                    let _ = ready_tx.send(Err(StartError::Other(
+                        "音声の出力のコールバックが来ない".into(),
+                    )));
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            if flags.overlapped.load(Ordering::Relaxed) {
+                let _ = ready_tx.send(Err(StartError::Other(
+                    "音声の出力の準備が間に合わず、前カウントの初めのクリックを鳴らせなかった"
+                        .into(),
+                )));
+                return;
+            }
             let _ = ready_tx.send(Ok(()));
-            // コールバックからの組を送り先へ渡し、出力先を失ったら `Lost` を1回送る
+            // コールバックからの組を送り先へ渡す。送り先が満杯なら、組は内側の列に残して次に回す。
+            // 出力先を失ったら `Lost` を、送れるまで送り直す
             let mut lost_sent = false;
             while !stop.load(Ordering::Relaxed) {
-                while let Ok(s) = stamp_rx.pop() {
-                    let _ = sink.push(AudioMsg::Stamp(s));
+                while let Ok(l) = log_rx.peek() {
+                    if sink.push(AudioMsg::Callback(*l)).is_err() {
+                        break;
+                    }
+                    let _ = log_rx.pop();
                 }
-                if !lost_sent && lost.load(Ordering::Relaxed) {
-                    let _ = sink.push(AudioMsg::Lost);
-                    lost_sent = true;
+                while let Ok(s) = stamp_rx.peek() {
+                    if sink.push(AudioMsg::Stamp(*s)).is_err() {
+                        break;
+                    }
+                    let _ = stamp_rx.pop();
+                }
+                if !lost_sent && flags.lost.load(Ordering::Relaxed) {
+                    lost_sent = sink.push(AudioMsg::Lost).is_ok();
                 }
                 std::thread::sleep(RELAY_TICK);
             }
@@ -468,6 +578,7 @@ mod tests {
             next: 0,
             playing: None,
             click_frames: 3,
+            overlapped: false,
         }
     }
 
@@ -502,5 +613,20 @@ mod tests {
         stamps.clear();
         v.fill(8, 18_000_000, ts, 1000, |_, _| {}, |s| stamps.push(s));
         assert!(stamps.is_empty());
+    }
+
+    /// 同じフレームで2つ以上のクリックを鳴らし始めたら（始まりが遅れて前のクリックを逃した）、印を立てる（Astra の監査）。
+    #[test]
+    fn voice_flags_overlapping_clicks() {
+        let ts = CpalTs {
+            callback_ns: 0,
+            playback_ns: 0,
+        };
+        let mut late = voice(&[(0, 2), (1_000_000, 1), (5_000_000, 1)]);
+        late.fill(4, 3_000_000, ts, 1000, |_, _| {}, |_| {});
+        assert!(late.overlapped);
+        let mut ok = voice(&[(5_000_000, 2), (6_000_000, 1)]);
+        ok.fill(4, 3_000_000, ts, 1000, |_, _| {}, |_| {});
+        assert!(!ok.overlapped);
     }
 }

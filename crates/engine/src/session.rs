@@ -257,6 +257,7 @@ impl OpenSession {
                     on_stamp(&s, count_in);
                     self.stamps.push(s);
                 }
+                AudioMsg::Callback(_) => {}
                 AudioMsg::Lost => lost = true,
             }
         }

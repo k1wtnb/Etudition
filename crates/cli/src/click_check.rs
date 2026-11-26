@@ -2,8 +2,13 @@
 //!
 //! 鳴らすのは人間が立ち会うとき。音量 0 なら音を出さずに時刻だけを記録する（計画 4章の S2）。
 
-use etudition_engine::click::{ClickPlan, ClickStamp, PlannedClick};
+use etudition_engine::click::{CallbackLog, ClickPlan, ClickStamp, PlannedClick};
 use serde_json::{Value, json};
+
+/// `secs` 秒のあいだ（0 秒と `secs` 秒を含む）、テンポ `bpm` で鳴らすクリックの数。
+pub fn click_count(secs: u32, bpm: u32) -> u32 {
+    secs * bpm / 60 + 1
+}
 
 /// 4/4 の練習のクリックを `count` 個、`interval_ns` おきに並べる（小節の頭を強く）。
 pub fn plan(count: u32, interval_ns: i64) -> ClickPlan {
@@ -19,9 +24,21 @@ pub fn plan(count: u32, interval_ns: i64) -> ClickPlan {
     }
 }
 
+/// コールバックの組を JSON の1行にする（S2a の生の記録）。
+pub fn callback_json(l: &CallbackLog) -> Value {
+    json!({
+        "type": "callback",
+        "engine_ns": l.engine_ns,
+        "cpal_callback_ns": l.cpal_ts.callback_ns,
+        "cpal_playback_ns": l.cpal_ts.playback_ns,
+        "frames": l.frames,
+    })
+}
+
 /// 組の1つを JSON の1行にする。
 pub fn stamp_json(s: &ClickStamp) -> Value {
     json!({
+        "type": "click",
         "index": s.index,
         "scheduled_ns": s.scheduled_ns,
         "cpal_callback_ns": s.cpal_ts.callback_ns,
@@ -81,6 +98,13 @@ mod tests {
             },
             at_ns,
         }
+    }
+
+    /// 0 秒から指定の秒までのクリックを入れる（1 秒・30 BPM でも 0 秒の1つは鳴らす。Astra の監査）。
+    #[test]
+    fn plan_count_includes_time_zero() {
+        assert_eq!(click_count(1, 30), 1);
+        assert_eq!(click_count(10, 120), 21);
     }
 
     #[test]

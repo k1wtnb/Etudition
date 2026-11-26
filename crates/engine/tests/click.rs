@@ -136,6 +136,7 @@ fn fake_out_stamps_every_click_with_known_cpal_times() {
     while let Ok(m) = rx.pop() {
         match m {
             AudioMsg::Stamp(s) => stamps.push(s),
+            AudioMsg::Callback(_) => panic!("偽の出力はコールバックの組を送らないはず"),
             AudioMsg::Lost => panic!("失わないはず"),
         }
     }
@@ -180,4 +181,71 @@ fn fake_out_can_be_missing_or_lost() {
     assert!(matches!(got[0], AudioMsg::Stamp(_)));
     assert!(matches!(got[1], AudioMsg::Stamp(_)));
     assert_eq!(got[2], AudioMsg::Lost);
+}
+
+/// AC-47：拍子ごとの前カウントの回数と間隔（Q-29）。♩＝60。
+#[test]
+fn plan_count_in_for_each_meter() {
+    // (拍子, divisions, 全部の長さ, 前カウントの回数, 間隔 ns, 位置 0)
+    let cases = [
+        ((3, 4), 1, 3, 3, S, 3 * S),
+        ((2, 4), 1, 2, 2, S, 2 * S),
+        ((2, 2), 1, 4, 2, 2 * S, 4 * S),
+        ((3, 8), 2, 3, 3, S / 2, 3 * S / 2),
+    ];
+    for ((b, t), div, dur, n, step, origin) in cases {
+        let e = one_measure(b, t, div, dur);
+        let m = Meter {
+            beats: i64::from(b),
+            beat_type: i64::from(t),
+        };
+        let p = ClickPlan::new(&timing(60, origin), m, &e);
+        let count_in: Vec<i64> = p
+            .clicks
+            .iter()
+            .filter(|c| c.count_in)
+            .map(|c| c.scheduled_ns)
+            .collect();
+        let want: Vec<i64> = (0..n).map(|k| k * step).collect();
+        assert_eq!(count_in, want, "{b}/{t}");
+        // 曲の最初のクリックは位置 0
+        assert_eq!(
+            p.clicks[usize::try_from(n).unwrap()].scheduled_ns,
+            origin,
+            "{b}/{t}"
+        );
+    }
+}
+
+/// 偽の出力は、組と `Lost` が列に入りきらなければ、黙って捨てずに始められないことにする（Astra の監査）。
+#[test]
+fn fake_out_fails_when_the_queue_is_too_small() {
+    let e = one_measure(4, 4, 1, 4);
+    let p = ClickPlan::new(
+        &timing(60, 4 * S),
+        Meter {
+            beats: 4,
+            beat_type: 4,
+        },
+        &e,
+    );
+    let (tx, _rx) = rtrb::RingBuffer::new(8);
+    let mut lost = FakeOut::new(0, 0).lost_after(8);
+    assert!(matches!(
+        lost.start(EngineClock::new(Instant::now()), &p, tx),
+        Err(StartError::Other(_))
+    ));
+}
+
+/// 出力先を失ったとみなすのは、装置や裏側がなくなったときだけ。一時的な音の途切れ（Xrun）や経路の切り替えでは無効にしない（Astra の監査）。
+#[test]
+fn only_device_loss_counts_as_lost() {
+    use cpal::ErrorKind;
+    use etudition_engine::click::is_output_lost;
+    assert!(is_output_lost(ErrorKind::DeviceNotAvailable));
+    assert!(is_output_lost(ErrorKind::HostUnavailable));
+    assert!(is_output_lost(ErrorKind::StreamInvalidated));
+    assert!(!is_output_lost(ErrorKind::Xrun));
+    assert!(!is_output_lost(ErrorKind::DeviceChanged));
+    assert!(!is_output_lost(ErrorKind::RealtimeDenied));
 }
