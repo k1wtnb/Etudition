@@ -174,8 +174,11 @@ fn click_check(secs: &str, bpm: &str, volume: &str, out: &std::path::Path) -> Ex
         ms(sum.latency_ns.2),
         if lost { "はい" } else { "いいえ" }
     );
+    if !audio.complete() {
+        eprintln!("コールバックの記録が欠けたか、停止までに受け取り切れなかった");
+    }
     // 欠けたクリックや出力先の喪失があれば、失敗で終える（測り直しが要ることを示す）
-    if lost || sum.count < plan.clicks.len() {
+    if !etudition_cli::click_check::usable(lost, sum.count, plan.clicks.len(), audio.complete()) {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS

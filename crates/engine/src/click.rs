@@ -246,6 +246,8 @@ pub struct CpalOut {
     volume: f32,
     log_callbacks: bool,
     stop: Arc<AtomicBool>,
+    /// 記録が欠けた、または停止までに送り先へ渡し切れなかった。
+    incomplete: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -256,8 +258,15 @@ impl CpalOut {
             volume: volume.clamp(0.0, 1.0),
             log_callbacks: false,
             stop: Arc::new(AtomicBool::new(false)),
+            incomplete: Arc::new(AtomicBool::new(false)),
             worker: None,
         }
+    }
+
+    /// 止めた後に読む。コールバックの記録とスタンプが欠けず、出力先の喪失も含めて
+    /// 全部を送り先へ渡せたなら真（S2a で、測った回を使えるかの判定に使う）。
+    pub fn complete(&self) -> bool {
+        !self.incomplete.load(Ordering::Acquire)
     }
 
     /// コールバックごとの時刻の組も送る（S2a の確かめ用。練習では使わない）。
@@ -352,6 +361,8 @@ struct Flags {
     called: Arc<AtomicBool>,
     /// 同じフレームで2つ以上のクリックを鳴らし始めた。
     overlapped: Arc<AtomicBool>,
+    /// コールバックの記録またはスタンプを内側の列に入れられなかった。
+    dropped: Arc<AtomicBool>,
 }
 
 /// 型 `T` のサンプルでストリームを作る。
@@ -379,12 +390,15 @@ fn build<T: SizedSample + FromSample<f32>>(
                 playback_ns: stream_ns(t.playback),
             };
             let frames = (data.len() / channels) as u64;
-            if let Some(l) = logs.as_mut() {
-                let _ = l.push(CallbackLog {
+            if let Some(l) = logs.as_mut()
+                && l.push(CallbackLog {
                     engine_ns,
                     cpal_ts: ts,
                     frames,
-                });
+                })
+                .is_err()
+            {
+                flags.dropped.store(true, Ordering::Relaxed);
             }
             voice.fill(
                 frames,
@@ -399,13 +413,16 @@ fn build<T: SizedSample + FromSample<f32>>(
                     }
                 },
                 |s| {
-                    let _ = stamps.push(s);
+                    if stamps.push(s).is_err() {
+                        flags.dropped.store(true, Ordering::Relaxed);
+                    }
                 },
             );
             if voice.overlapped {
                 flags.overlapped.store(true, Ordering::Relaxed);
             }
-            flags.called.store(true, Ordering::Relaxed);
+            // `overlapped` を書いてから `called` を Release で立てる（開始の判定が Acquire で読む）
+            flags.called.store(true, Ordering::Release);
         },
         move |e| {
             if is_output_lost(e.kind()) {
@@ -427,6 +444,9 @@ impl AudioOut for CpalOut {
         let volume = self.volume;
         let log_callbacks = self.log_callbacks;
         let stop = Arc::clone(&self.stop);
+        let incomplete = Arc::clone(&self.incomplete);
+        self.stop.store(false, Ordering::Relaxed);
+        incomplete.store(false, Ordering::Relaxed);
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), StartError>>();
         self.worker = Some(std::thread::spawn(move || {
             let host = cpal::default_host();
@@ -457,6 +477,7 @@ impl AudioOut for CpalOut {
                 lost: Arc::new(AtomicBool::new(false)),
                 called: Arc::new(AtomicBool::new(false)),
                 overlapped: Arc::new(AtomicBool::new(false)),
+                dropped: Arc::new(AtomicBool::new(false)),
             };
             let (stamp_tx, mut stamp_rx) = rtrb::RingBuffer::new(1024);
             let (log_tx, mut log_rx) = rtrb::RingBuffer::new(4096);
@@ -500,7 +521,7 @@ impl AudioOut for CpalOut {
             };
             // 最初のコールバックを待つ。前カウントの初めのクリックを2つ以上逃して始まったら、普通の回として進めない（Astra の監査）
             let waited = Instant::now();
-            while !flags.called.load(Ordering::Relaxed) {
+            while !flags.called.load(Ordering::Acquire) {
                 if waited.elapsed() > FIRST_CALLBACK_TIMEOUT {
                     let _ = ready_tx.send(Err(StartError::Other(
                         "音声の出力のコールバックが来ない".into(),
@@ -520,7 +541,7 @@ impl AudioOut for CpalOut {
             // コールバックからの組を送り先へ渡す。送り先が満杯なら、組は内側の列に残して次に回す。
             // 出力先を失ったら `Lost` を、送れるまで送り直す
             let mut lost_sent = false;
-            while !stop.load(Ordering::Relaxed) {
+            let mut relay = |sink: &mut rtrb::Producer<AudioMsg>| {
                 while let Ok(l) = log_rx.peek() {
                     if sink.push(AudioMsg::Callback(*l)).is_err() {
                         break;
@@ -536,9 +557,20 @@ impl AudioOut for CpalOut {
                 if !lost_sent && flags.lost.load(Ordering::Relaxed) {
                     lost_sent = sink.push(AudioMsg::Lost).is_ok();
                 }
+            };
+            while !stop.load(Ordering::Relaxed) {
+                relay(&mut sink);
                 std::thread::sleep(RELAY_TICK);
             }
+            // 止めたら、もうコールバックは来ない。残りを渡し、渡し切れなければ欠けたことにする（Astra の監査 2回目）
             drop(stream);
+            relay(&mut sink);
+            let left = !log_rx.is_empty()
+                || !stamp_rx.is_empty()
+                || (flags.lost.load(Ordering::Relaxed) && !lost_sent);
+            if left || flags.dropped.load(Ordering::Relaxed) {
+                incomplete.store(true, Ordering::Release);
+            }
         }));
         ready_rx
             .recv()
