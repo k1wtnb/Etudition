@@ -237,7 +237,18 @@ fn midi_log(secs: &str, out: &std::path::Path) -> ExitCode {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+    // 受付を締めてから、中継が渡した残りも書く（終わり際の Note Off を落とさない。Astra の監査）
     input.close();
+    while let Ok(m) = rx.pop() {
+        match m {
+            InputMsg::Midi(r) => {
+                let _ = writeln!(lines, "{}", etudition_cli::midi_log::raw_json(&r));
+                count += 1;
+            }
+            InputMsg::Disconnected => disconnected = true,
+            InputMsg::Finished => {}
+        }
+    }
     if let Err(e) = std::fs::write(out, lines) {
         eprintln!("{} を書けない: {e}", out.display());
         return ExitCode::FAILURE;
@@ -251,6 +262,10 @@ fn midi_log(secs: &str, out: &std::path::Path) -> ExitCode {
             "なかった"
         }
     );
+    // あふれ（取りこぼし）があれば、失敗で終える（測り直しが要ることを示す）
+    if overflow.load(Ordering::Relaxed) > 0 {
+        return ExitCode::FAILURE;
+    }
     ExitCode::SUCCESS
 }
 

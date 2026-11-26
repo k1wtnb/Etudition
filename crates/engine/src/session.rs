@@ -452,6 +452,7 @@ impl OpenSession {
         until_ns: i64,
         result: Option<crate::record::ResultRecord>,
         invalid: Option<InvalidReason>,
+        overflow_count: u32,
     ) -> RunRecord {
         let c = self.setup.correction_ns;
         RunRecord {
@@ -487,7 +488,7 @@ impl OpenSession {
                 .collect(),
             result,
             invalid_reason: invalid.map(InvalidReason::text),
-            overflow_count: self.overflow.load(Ordering::Relaxed),
+            overflow_count,
         }
     }
 
@@ -497,7 +498,8 @@ impl OpenSession {
         let result = score_run(&self.input(&perf), end);
         // 止まった回も2つの記録を書く（Q-51。人間の回答 2026-11-26）。止まった回の結果は点数と合否を持たない
         let kept: Vec<PerfEvent> = perf.into_iter().filter(|e| e.t_ns <= end.at_ns).collect();
-        let rec = self.record(raw, end.at_ns, Some((&result).into()), None);
+        // あふれの数は手順5で読んだもの（0）を使う。ここで読み直さない（Astra の監査）
+        let rec = self.record(raw, end.at_ns, Some((&result).into()), None, 0);
         let record = status(write_run(&self.setup.record_dir, Some(&rec), Some(&kept)));
         notify(EngineEvent::Ended {
             result: result.clone(),
@@ -518,7 +520,12 @@ impl OpenSession {
         if stop.load(Ordering::Relaxed) {
             return SessionOutcome::Cancelled;
         }
-        let rec = self.record(raw, i64::MAX, None, Some(reason));
+        // あふれで無効にした回は、判定に使った数を記録する。ほかの理由の回は今の数
+        let count = match reason {
+            InvalidReason::Overflow { count } => count,
+            _ => self.overflow.load(Ordering::Relaxed),
+        };
+        let rec = self.record(raw, i64::MAX, None, Some(reason), count);
         let perf = to_perf(raw, self.setup.correction_ns);
         let record = status(write_run(&self.setup.record_dir, Some(&rec), Some(&perf)));
         notify(EngineEvent::Invalid { reason, record });

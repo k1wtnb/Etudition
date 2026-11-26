@@ -330,8 +330,13 @@ mod tests {
     }
 
     /// 1a-8：実際の練習は、楽譜を読んでから始める。MIDI 機器がなければ始めず（AC-43。REQ-103）、回の印を外す。
-    /// （Dev Container には MIDI 機器がないので、機器がない側だけを確かめる）
+    /// 機器がない側だけを確かめる。機器がないと分かっている Dev Container（Linux）だけで動かす
+    /// （F767 をつないだ Windows では前提が崩れるため。Astra の監査）
     #[test]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        ignore = "MIDI 機器がない環境（Dev Container）だけで動かす"
+    )]
     fn start_practice_needs_a_score_and_a_midi_device() {
         let (app, _w) = app();
         let base = std::env::temp_dir().join(format!("etudition-start-{}", std::process::id()));

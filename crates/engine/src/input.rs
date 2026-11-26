@@ -232,6 +232,33 @@ pub fn raw_midi(at_ns: i64, backend_us: u64, msg: &[u8]) -> Option<RawMidi> {
     })
 }
 
+/// コールバックで受けたメッセージを内側の列に入れる。入らなければ捨てて、あふれに数える（待たず、確保しない。REQ-104）。
+pub fn accept(tx: &mut rtrb::Producer<InputMsg>, overflow: &AtomicU32, msg: InputMsg) {
+    if tx.push(msg).is_err() {
+        overflow.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// 保留と内側の列を、順番どおりに送り先へ渡す。送り先が満杯なら、渡せなかったものを保留に残す。全部渡せたら真。
+pub fn relay_input(
+    pending: &mut Option<InputMsg>,
+    rx: &mut rtrb::Consumer<InputMsg>,
+    out: &mut rtrb::Producer<InputMsg>,
+) -> bool {
+    while let Some(m) = pending.take().or_else(|| rx.pop().ok()) {
+        if let Err(rtrb::PushError::Full(back)) = out.push(m) {
+            *pending = Some(back);
+            return false;
+        }
+    }
+    true
+}
+
+/// 渡せずに残ったメッセージの数。
+pub fn left_over(pending: &Option<InputMsg>, rx: &rtrb::Consumer<InputMsg>) -> usize {
+    usize::from(pending.is_some()) + rx.slots()
+}
+
 /// 入力の機器の名前の一覧から、使う機器を選ぶ。なければ `None`（`NoMidiDevice`）。今は最初のもの（S2b と S3 で見直す）。
 pub fn choose_port(names: &[String]) -> Option<usize> {
     (!names.is_empty()).then_some(0)
@@ -303,38 +330,48 @@ impl MidiInput for MidirInput {
                 "etudition-in",
                 move |stamp_us, msg, ()| {
                     let at_ns = clock.ns_of(std::time::Instant::now());
-                    if let Some(r) = raw_midi(at_ns, stamp_us, msg)
-                        && tx.push(InputMsg::Midi(r)).is_err()
-                    {
-                        overflow.fetch_add(1, Ordering::Relaxed);
+                    if let Some(r) = raw_midi(at_ns, stamp_us, msg) {
+                        accept(&mut tx, &overflow, InputMsg::Midi(r));
                     }
                 },
                 (),
             )
             .map_err(|e| StartError::Other(format!("MIDI 機器を開けない: {e}")))?;
         let stop = Arc::clone(&self.stop);
+        let overflow = Arc::clone(&sink.overflow);
         let mut producer = sink.producer;
         self.worker = Some(std::thread::spawn(move || {
             let mut last_watch = std::time::Instant::now();
             let mut pending: Option<InputMsg> = None;
-            while !stop.load(Ordering::Relaxed) {
-                while let Some(m) = pending.take().or_else(|| rx.pop().ok()) {
-                    // 送り先が満杯なら、捨てずに次の周回で入れ直す（ここはコールバックではないので待ってよい）
-                    if let Err(rtrb::PushError::Full(back)) = producer.push(m) {
-                        pending = Some(back);
-                        break;
-                    }
+            // 止めるとき：受付はもう締めてある（close が先に機器を閉じる）。残りを渡し、渡せない分はあふれに数える（黙って捨てない）
+            let give_up = |pending: &Option<InputMsg>, rx: &rtrb::Consumer<InputMsg>| {
+                let n = u32::try_from(left_over(pending, rx)).unwrap_or(u32::MAX);
+                overflow.fetch_add(n, Ordering::Relaxed);
+            };
+            loop {
+                // 送り先が満杯なら、捨てずに次の周回で入れ直す（ここはコールバックではないので待ってよい）
+                let stopping = stop.load(Ordering::Acquire);
+                relay_input(&mut pending, &mut rx, &mut producer);
+                if stopping {
+                    give_up(&pending, &rx);
+                    return;
                 }
                 if last_watch.elapsed() >= MIDIR_WATCH {
                     last_watch = std::time::Instant::now();
                     if !port_present(&id) {
-                        while producer.push(InputMsg::Disconnected).is_err() {
-                            if stop.load(Ordering::Relaxed) {
+                        // 抜けた：すでに受けた音を全部渡してから、切断を知らせる（Astra の監査）
+                        loop {
+                            if relay_input(&mut pending, &mut rx, &mut producer)
+                                && producer.push(InputMsg::Disconnected).is_ok()
+                            {
+                                return;
+                            }
+                            if stop.load(Ordering::Acquire) {
+                                give_up(&pending, &rx);
                                 return;
                             }
                             std::thread::sleep(MIDIR_RELAY_TICK);
                         }
-                        return;
                     }
                 }
                 std::thread::sleep(MIDIR_RELAY_TICK);
@@ -346,12 +383,13 @@ impl MidiInput for MidirInput {
     }
 
     fn close(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(w) = self.worker.take() {
-            let _ = w.join();
-        }
+        // 先に機器を閉じて受付を締める（もうコールバックは来ない）。それから中継に残りを渡させて止める
         if let Some(c) = self.conn.take() {
             let _ = c.close();
+        }
+        self.stop.store(true, Ordering::Release);
+        if let Some(w) = self.worker.take() {
+            let _ = w.join();
         }
     }
 }
@@ -390,5 +428,49 @@ mod midir_tests {
     fn choose_port_takes_the_first_or_none() {
         assert_eq!(choose_port(&[]), None);
         assert_eq!(choose_port(&["F767 MIDI".into(), "other".into()]), Some(0));
+    }
+
+    fn note(n: u8) -> InputMsg {
+        InputMsg::Midi(raw_midi(i64::from(n), 0, &[0x90, n, 100]).unwrap())
+    }
+
+    /// コールバックの投入：内側の列が満杯なら捨てて、あふれに数える（REQ-104、AC-44）。
+    #[test]
+    fn accept_counts_what_does_not_fit() {
+        let (mut tx, mut rx) = rtrb::RingBuffer::new(1);
+        let overflow = AtomicU32::new(0);
+        accept(&mut tx, &overflow, note(60));
+        accept(&mut tx, &overflow, note(62));
+        assert_eq!(overflow.load(Ordering::Relaxed), 1);
+        assert_eq!(rx.pop(), Ok(note(60)));
+    }
+
+    /// 中継：送り先が満杯なら残りを保留し、空いたら順番どおりに渡す（Astra の監査）。
+    #[test]
+    fn relay_keeps_order_when_the_sink_is_full() {
+        let (mut inner_tx, mut inner_rx) = rtrb::RingBuffer::new(8);
+        for n in [60, 62, 64] {
+            inner_tx.push(note(n)).unwrap();
+        }
+        let (mut out, mut got) = rtrb::RingBuffer::new(2);
+        let mut pending = None;
+        assert!(!relay_input(&mut pending, &mut inner_rx, &mut out));
+        assert_eq!((got.pop(), got.pop()), (Ok(note(60)), Ok(note(62))));
+        assert!(relay_input(&mut pending, &mut inner_rx, &mut out));
+        assert_eq!(got.pop(), Ok(note(64)));
+        assert_eq!(left_over(&pending, &inner_rx), 0);
+    }
+
+    /// 渡せずに残った数（止めるときにあふれに足す）。
+    #[test]
+    fn left_over_counts_pending_and_queued() {
+        let (mut inner_tx, mut inner_rx) = rtrb::RingBuffer::new(8);
+        for n in [60, 62] {
+            inner_tx.push(note(n)).unwrap();
+        }
+        let (mut out, _got) = rtrb::RingBuffer::new(0);
+        let mut pending = None;
+        assert!(!relay_input(&mut pending, &mut inner_rx, &mut out));
+        assert_eq!(left_over(&pending, &inner_rx), 2);
     }
 }

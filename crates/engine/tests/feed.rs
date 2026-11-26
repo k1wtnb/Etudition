@@ -691,10 +691,14 @@ fn lost_audio_output_makes_the_run_invalid() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 受けたメッセージを送ったあと、捨てた数を足して終わる試験用の入力（REQ-104 のあふれを起こす）。
+/// 実機の入力と同じ投入（`input::accept`）で、小さい内側の列を本当にあふれさせてから、
+/// 楽譜どおりの音を送る試験用の入力（REQ-104 のあふれを起こす）。
 struct OverflowInput {
     inner: FileInput,
-    dropped: u32,
+    /// 内側の列の長さ（これを超えて入れた分があふれる）。
+    capacity: usize,
+    /// 入れようとするメッセージの数。
+    sent: usize,
 }
 
 impl etudition_engine::input::MidiInput for OverflowInput {
@@ -703,8 +707,20 @@ impl etudition_engine::input::MidiInput for OverflowInput {
         clock: etudition_engine::clock::EngineClock,
         sink: etudition_engine::input::InputSink,
     ) -> Result<(), StartError> {
-        sink.overflow
-            .fetch_add(self.dropped, std::sync::atomic::Ordering::Relaxed);
+        let (mut tx, _rx) = etudition_engine::rtrb::RingBuffer::new(self.capacity);
+        for n in 0..self.sent {
+            let r = etudition_engine::input::raw_midi(
+                0,
+                0,
+                &[0x90, 60, u8::try_from(n % 100).unwrap() + 1],
+            )
+            .unwrap();
+            etudition_engine::input::accept(
+                &mut tx,
+                &sink.overflow,
+                etudition_engine::input::InputMsg::Midi(r),
+            );
+        }
         self.inner.open(clock, sink)
     }
     fn close(&mut self) {
@@ -720,7 +736,8 @@ fn overflow_makes_the_run_invalid() {
     let e = expansion(TIE);
     let input = OverflowInput {
         inner: FileInput::new(&as_written_midi(&e, false), &e, &t).unwrap(),
-        dropped: 3,
+        capacity: 2,
+        sent: 5,
     };
     let open = open_session(setup_for(TIE, t, &dir.join("run")), Box::new(input), None).unwrap();
     let seen = Mutex::new(Vec::new());
