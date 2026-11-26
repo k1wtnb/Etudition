@@ -431,9 +431,22 @@ impl OpenSession {
                 }
                 marked_until = until;
             }
-            if let Some(end) = end {
+            if let Some(mut end) = end {
                 if stop.load(Ordering::Relaxed) {
                     return SessionOutcome::Cancelled;
+                }
+                // 受付を締め、中継が最後に渡した音も取り込んでから、終わりとあふれを決める（Astra の監査）。
+                // 終わりより後の音は、採点と記録の終わりの時刻で外れる
+                self.input.close();
+                let before = raw.len();
+                while let Ok(m) = self.consumer.pop() {
+                    if let InputMsg::Midi(r) = m {
+                        raw.push(r);
+                    }
+                }
+                if raw.len() > before {
+                    let perf = to_perf(&raw, self.setup.correction_ns);
+                    end = decide_end(&self.input(&perf), now).unwrap_or(end);
                 }
                 // 採点の前にあふれの数を読む（B0 の4章の手順5）
                 if let Some(why) = self.overflowed() {

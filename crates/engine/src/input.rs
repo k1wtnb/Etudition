@@ -161,6 +161,11 @@ impl FileInput {
         })
     }
 
+    /// 試験用：送るメッセージの列。
+    pub fn messages(&self) -> &[InputMsg] {
+        &self.msgs
+    }
+
     /// 試験用：時刻 `at_ns` 以降のメッセージの代わりに、接続が切れたことを送る（1a-9、REQ-103）。
     pub fn disconnect_at(mut self, at_ns: i64) -> FileInput {
         let cut = self
@@ -324,21 +329,33 @@ impl MidiInput for MidirInput {
         let id = port.id();
         let (mut tx, mut rx) = rtrb::RingBuffer::<InputMsg>::new(MIDIR_QUEUE);
         let overflow = Arc::clone(&sink.overflow);
+        // 切断を見つけたら受付を締める門。コールバックは入る前に `busy` を上げ、`closed` を見る。
+        // 中継は `closed` を立ててから `busy` が 0 になるのを待つ（SeqCst。走っている途中のコールバックの音も渡すため）
+        let gate = Arc::new((AtomicBool::new(false), AtomicU32::new(0)));
+        let cb_gate = Arc::clone(&gate);
+        let cb_overflow = Arc::clone(&overflow);
         let conn = input
             .connect(
                 port,
                 "etudition-in",
                 move |stamp_us, msg, ()| {
+                    let (closed, busy) = &*cb_gate;
+                    busy.fetch_add(1, Ordering::SeqCst);
                     let at_ns = clock.ns_of(std::time::Instant::now());
                     if let Some(r) = raw_midi(at_ns, stamp_us, msg) {
-                        accept(&mut tx, &overflow, InputMsg::Midi(r));
+                        if closed.load(Ordering::SeqCst) {
+                            // 切断を知らせた後に届いた音は渡せない。黙って捨てず、あふれに数える
+                            cb_overflow.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            accept(&mut tx, &cb_overflow, InputMsg::Midi(r));
+                        }
                     }
+                    busy.fetch_sub(1, Ordering::SeqCst);
                 },
                 (),
             )
             .map_err(|e| StartError::Other(format!("MIDI 機器を開けない: {e}")))?;
         let stop = Arc::clone(&self.stop);
-        let overflow = Arc::clone(&sink.overflow);
         let mut producer = sink.producer;
         self.worker = Some(std::thread::spawn(move || {
             let mut last_watch = std::time::Instant::now();
@@ -359,7 +376,12 @@ impl MidiInput for MidirInput {
                 if last_watch.elapsed() >= MIDIR_WATCH {
                     last_watch = std::time::Instant::now();
                     if !port_present(&id) {
-                        // 抜けた：すでに受けた音を全部渡してから、切断を知らせる（Astra の監査）
+                        // 抜けた：受付を締め、走っているコールバックが終わるのを待ってから、
+                        // すでに受けた音を全部渡し、切断を知らせる（Astra の監査）
+                        gate.0.store(true, Ordering::SeqCst);
+                        while gate.1.load(Ordering::SeqCst) > 0 {
+                            std::thread::yield_now();
+                        }
                         loop {
                             if relay_input(&mut pending, &mut rx, &mut producer)
                                 && producer.push(InputMsg::Disconnected).is_ok()

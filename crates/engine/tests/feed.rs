@@ -554,6 +554,70 @@ fn stop_then_disconnect_writes_nothing() {
     assert!(!dir.exists());
 }
 
+/// 最後のメッセージを、閉じるときに初めて渡す試験用の入力（受付を締めた後に中継が渡す分を作る。Astra の監査）。
+struct HeldLastInput {
+    msgs: Vec<etudition_engine::input::InputMsg>,
+    producer: Option<etudition_engine::rtrb::Producer<etudition_engine::input::InputMsg>>,
+}
+
+impl etudition_engine::input::MidiInput for HeldLastInput {
+    fn open(
+        &mut self,
+        _clock: etudition_engine::clock::EngineClock,
+        mut sink: etudition_engine::input::InputSink,
+    ) -> Result<(), StartError> {
+        let last = self.msgs.len() - 1;
+        for m in self.msgs.drain(..last) {
+            sink.producer.push(m).unwrap();
+        }
+        self.producer = Some(sink.producer);
+        Ok(())
+    }
+    fn close(&mut self) {
+        if let Some(p) = self.producer.as_mut() {
+            for m in self.msgs.drain(..) {
+                p.push(m).unwrap();
+            }
+        }
+    }
+}
+
+/// 時計で進む回は、終わりが決まったら受付を締め、中継が最後に渡した音（終わり際のノートオフ）も採点と記録に入れる。
+#[test]
+fn live_mode_takes_what_arrives_when_input_closes() {
+    let dir = tmp("live-held");
+    let t = timing(600, 0);
+    let e = expansion(TIE);
+    let msgs = FileInput::new(&as_written_midi(&e, false), &e, &t)
+        .unwrap()
+        .messages()
+        .to_vec();
+    let last_ns = match msgs.last() {
+        Some(etudition_engine::input::InputMsg::Midi(r)) => r.at_ns,
+        m => panic!("最後はノートのはず: {m:?}"),
+    };
+    let input = HeldLastInput {
+        msgs,
+        producer: None,
+    };
+    let open = open_session(setup_for(TIE, t, &dir.join("run")), Box::new(input), None).unwrap();
+    let outcome = open.run(RunMode::Live, &|_| {}, &AtomicBool::new(false));
+    let SessionOutcome::Scored(res) = outcome else {
+        panic!("採点されるはず: {outcome:?}");
+    };
+    let items = res.items.unwrap();
+    assert_eq!(items.duration.errors, 0, "終わり際のノートオフも採点に入る");
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("run").join("result.json")).unwrap())
+            .unwrap();
+    let events = json["events"].as_array().unwrap();
+    assert!(
+        events.iter().any(|e| e["raw_ns"] == last_ns),
+        "記録にも入る"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn setup_for(score: &[u8], t: Timing, dir: &Path) -> PracticeSetup {
     PracticeSetup {
         expansion: expansion(score),
