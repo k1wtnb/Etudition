@@ -4,4 +4,4 @@ import type { UiTime } from "./UiTime";
 /**
  * 演奏の1音（打鍵の時刻）。
  */
-export type PlayedView = { note: number, on: UiTime, off: UiTime, };
+export type PlayedView = { note: number; on: UiTime; off: UiTime };

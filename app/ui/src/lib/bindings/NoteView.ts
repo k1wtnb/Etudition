@@ -8,12 +8,18 @@ import type { UiTime } from "./UiTime";
 /**
  * お手本の1音の、演奏後の判定。
  */
-export type NoteView = { ref_index: number, is_grace: boolean, pitch: PitchView, 
-/**
- * 組になった演奏の音。
- */
-played: PlayedView | null, timing: TimingView, 
-/**
- * 演奏のノートオンの時刻 − お手本の時刻。
- */
-delta: UiTime | null, duration: DurationView, };
+export type NoteView = {
+  ref_index: number;
+  is_grace: boolean;
+  pitch: PitchView;
+  /**
+   * 組になった演奏の音。
+   */
+  played: PlayedView | null;
+  timing: TimingView;
+  /**
+   * 演奏のノートオンの時刻 − お手本の時刻。
+   */
+  delta: UiTime | null;
+  duration: DurationView;
+};

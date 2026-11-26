@@ -8,24 +8,28 @@ import type { UiTime } from "./UiTime";
 /**
  * 採点の結果。
  */
-export type RunResultView = { rules_version: string, end: EndView, end_at: UiTime, 
-/**
- * お手本の音ごとの判定（止まった回は、止まった位置より前の音だけ）。
- */
-notes: Array<NoteView>, 
-/**
- * 余分な音。
- */
-extras: Array<PlayedView>, 
-/**
- * 止まった回は `null`。
- */
-items: ItemsView | null, 
-/**
- * 止まった回は `null`。
- */
-passed: boolean | null, 
-/**
- * 止まった位置の組の先頭の `ref_index`。
- */
-stopped_at: number | null, };
+export type RunResultView = {
+  rules_version: string;
+  end: EndView;
+  end_at: UiTime;
+  /**
+   * お手本の音ごとの判定（止まった回は、止まった位置より前の音だけ）。
+   */
+  notes: Array<NoteView>;
+  /**
+   * 余分な音。
+   */
+  extras: Array<PlayedView>;
+  /**
+   * 止まった回は `null`。
+   */
+  items: ItemsView | null;
+  /**
+   * 止まった回は `null`。
+   */
+  passed: boolean | null;
+  /**
+   * 止まった位置の組の先頭の `ref_index`。
+   */
+  stopped_at: number | null;
+};

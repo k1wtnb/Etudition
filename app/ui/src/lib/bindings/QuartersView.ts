@@ -3,12 +3,13 @@
 /**
  * 四分音符の数（`num / den`。画面では表示とカーソルにだけ使う）。
  */
-export type QuartersView = { 
-/**
- * 分子（弱起は負）。
- */
-num: number, 
-/**
- * 分母。
- */
-den: number, };
+export type QuartersView = {
+  /**
+   * 分子（弱起は負）。
+   */
+  num: number;
+  /**
+   * 分母。
+   */
+  den: number;
+};
