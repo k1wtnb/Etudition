@@ -2,7 +2,8 @@
 //!
 //! - `etudition-cli s1 <楽譜のパス>`：書かれた音符、展開後の小節、鳴る音、読めない要素を JSON で出す（S1）。
 //! - `etudition-cli s1-xml <楽譜のパス>`：楽譜の XML の文字列を出す（`.mxl` は展開する。OSMD に渡す用）。
-//! - `etudition-cli make-errors <楽譜のパス> <出力のフォルダ>`：誤りの種類ごとの MIDI を作る（計画 1a-3。種類は `errors::CASES`）。
+//! - `etudition-cli make-errors <楽譜のパス> <出力のフォルダ>`：誤りの種類ごとの MIDI を作る（計画 1a-3。種類は `errors::CASES`。
+//!   合成の楽譜 T1 だけを受け付ける）。
 
 use std::process::ExitCode;
 
@@ -49,6 +50,19 @@ fn main() -> ExitCode {
 
 /// 誤りの種類ごとの MIDI を `out` に書く（`<名前>.mid`）。
 fn make_errors(path: &str, out: &std::path::Path) -> ExitCode {
+    // Windows で取り出した写しは改行が CRLF のことがあるので、LF にそろえて比べる
+    let normalized = |b: &[u8]| String::from_utf8_lossy(b).replace('\r', "");
+    match std::fs::read(path) {
+        Ok(b) if normalized(&b) == normalized(etudition_cli::errors::T1) => {}
+        Ok(_) => {
+            eprintln!("make-errors は合成の楽譜 T1（fixtures/1a/t1.musicxml）だけを受け付ける");
+            return ExitCode::FAILURE;
+        }
+        Err(e) => {
+            eprintln!("{path} を開けない: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
     let loaded = match std::fs::read(path)
         .map_err(|e| ReadError(format!("{path} を開けない: {e}")))
         .and_then(|b| read_score(&b))

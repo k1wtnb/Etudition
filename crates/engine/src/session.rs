@@ -268,6 +268,10 @@ impl OpenSession {
         for (_, _, ev) in timeline {
             notify(ev);
         }
+        // 記録の前に、終了の要求をもう一度見る（途中で閉じた回は記録しない。AC-42 の (3)）
+        if stop.load(Ordering::Relaxed) {
+            return SessionOutcome::Cancelled;
+        }
         self.finish(end, &raw, notify)
     }
 
@@ -308,6 +312,9 @@ impl OpenSession {
                 marked_until = until;
             }
             if let Some(end) = end {
+                if stop.load(Ordering::Relaxed) {
+                    return SessionOutcome::Cancelled;
+                }
                 return self.finish(end, &raw, notify);
             }
             std::thread::sleep(ENGINE_TICK);
@@ -319,7 +326,7 @@ impl OpenSession {
         &self,
         raw: &[RawMidi],
         until_ns: i64,
-        result: Option<RunResult>,
+        result: Option<crate::record::ResultRecord>,
         invalid: Option<InvalidReason>,
     ) -> RunRecord {
         let c = self.setup.correction_ns;
@@ -357,7 +364,7 @@ impl OpenSession {
             EndKind::Normal | EndKind::Cap => {
                 let kept: Vec<PerfEvent> =
                     perf.into_iter().filter(|e| e.t_ns <= end.at_ns).collect();
-                let rec = self.record(raw, end.at_ns, Some(result.clone()), None);
+                let rec = self.record(raw, end.at_ns, Some((&result).into()), None);
                 status(write_run(&self.setup.record_dir, Some(&rec), Some(&kept)))
             }
             // 止まった回の performance.mid と result.json は未確定（Q-51）なので書かない

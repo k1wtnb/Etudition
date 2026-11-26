@@ -83,6 +83,19 @@ fn as_written_midi(e: &Expansion, drop_last: bool) -> Vec<u8> {
     out
 }
 
+/// 楽譜どおりに流したときに受けるはずのメッセージの列（時刻、バイト列）。並びは時刻、同じ時刻はノートオフが先。
+fn expected_events(e: &Expansion, t: &Timing) -> Vec<(i64, [u8; 3])> {
+    use etudition_core::timing::position_to_ns;
+    let mut v: Vec<(i64, u8, [u8; 3])> = Vec::new();
+    for s in &e.sounding {
+        let key = s.pitch as u8;
+        v.push((position_to_ns(t, s.start), 1, [0x90, key, 100]));
+        v.push((position_to_ns(t, s.start + s.duration), 0, [0x80, key, 0]));
+    }
+    v.sort();
+    v.into_iter().map(|(ns, _, b)| (ns, b)).collect()
+}
+
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("etudition-feed-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
@@ -108,6 +121,8 @@ struct Opts {
     disconnect_at: Option<i64>,
     mode: RunMode,
     stop_now: bool,
+    /// 最初のノートオンの通知で終了を要求する（演奏の途中で閉じる）。
+    stop_on_first_note: bool,
 }
 
 const FEED: Opts = Opts {
@@ -115,6 +130,7 @@ const FEED: Opts = Opts {
     disconnect_at: None,
     mode: RunMode::Feed,
     stop_now: false,
+    stop_on_first_note: false,
 };
 
 fn feed(score: &[u8], midi: &[u8], t: Timing, dir: &Path, o: Opts) -> Run {
@@ -135,7 +151,13 @@ fn feed(score: &[u8], midi: &[u8], t: Timing, dir: &Path, o: Opts) -> Run {
     let open = open_session(setup, Box::new(input)).expect("開けるはず");
     let seen = Mutex::new(Vec::new());
     let stop = AtomicBool::new(o.stop_now);
-    let outcome = open.run(o.mode, &|ev| seen.lock().unwrap().push(ev), &stop);
+    let notify = |ev: EngineEvent| {
+        if o.stop_on_first_note && matches!(ev, EngineEvent::NoteReceived { .. }) {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        seen.lock().unwrap().push(ev);
+    };
+    let outcome = open.run(o.mode, &notify, &stop);
     Run {
         outcome,
         events: seen.into_inner().unwrap(),
@@ -200,19 +222,60 @@ fn feed_as_written_scores_and_records() {
     assert_eq!(json["tempo"]["den"], 1);
     assert_eq!(json["count_in_end_ns"], 4 * S);
     assert_eq!(json["correction_ns"], 0);
-    // 弱起の G4 は 3 秒（前カウントの4拍目）
-    assert_eq!(json["events"][0]["raw_ns"], 3 * S);
-    assert_eq!(json["events"][0]["corrected_ns"], 3 * S);
-    assert_eq!(json["events"].as_array().unwrap().len(), 6);
+    // 全部のイベントを、流した列と比べる（弱起の G4 は 3 秒＝前カウントの4拍目）
+    let expected = expected_events(&e, &t);
+    let got: Vec<(i64, i64, Vec<u8>)> = json["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| {
+            (
+                v["raw_ns"].as_i64().unwrap(),
+                v["corrected_ns"].as_i64().unwrap(),
+                v["bytes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|b| b.as_u64().unwrap() as u8)
+                    .collect(),
+            )
+        })
+        .collect();
+    let want: Vec<(i64, i64, Vec<u8>)> = expected
+        .iter()
+        .map(|(ns, b)| (*ns, *ns, b.to_vec()))
+        .collect();
+    assert_eq!(got, want);
+    assert_eq!(want[0].0, 3 * S);
     assert_eq!(json["result"]["items"]["pitch"]["q"], 1_000_000);
     assert_eq!(json["result"]["passed"], true);
     let mid = std::fs::read(files.midi.as_ref().unwrap()).unwrap();
     let smf = midly::Smf::parse(&mid).unwrap();
-    let notes = smf.tracks[0]
+    // performance.mid：全部のメッセージの音高、オンかオフか、時刻（1 tick ＝ 約 0.52 ms の分解能）を比べる
+    let mut tick: i64 = 0;
+    let mut midi_got = Vec::new();
+    for ev in &smf.tracks[0] {
+        tick += i64::from(ev.delta.as_int());
+        if let midly::TrackEventKind::Midi { message, .. } = ev.kind {
+            let (key, on) = match message {
+                midly::MidiMessage::NoteOn { key, vel } => (key.as_int(), vel.as_int() != 0),
+                midly::MidiMessage::NoteOff { key, .. } => (key.as_int(), false),
+                _ => continue,
+            };
+            midi_got.push((tick, key, on));
+        }
+    }
+    let midi_want: Vec<(i64, u8, bool)> = expected
         .iter()
-        .filter(|e| matches!(e.kind, midly::TrackEventKind::Midi { .. }))
-        .count();
-    assert_eq!(notes, 6);
+        .map(|(ns, b)| {
+            (
+                ns * 960 / 500_000_000,
+                b[1],
+                b[0] & 0xf0 == 0x90 && b[2] != 0,
+            )
+        })
+        .collect();
+    assert_eq!(midi_got, midi_want);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -330,7 +393,7 @@ fn unwritable_record_dir_fails_cleanly() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// AC-42 の (3)：途中で閉じた回は、何も記録しない。
+/// AC-42 の (3)：演奏の途中で閉じた回は、何も記録しない（一時フォルダも残らない）。
 #[test]
 fn cancelled_run_writes_nothing() {
     let dir = tmp("cancel");
@@ -342,12 +405,18 @@ fn cancelled_run_writes_nothing() {
         t,
         &dir.join("run"),
         Opts {
-            stop_now: true,
+            stop_on_first_note: true,
             ..FEED
         },
     );
     assert_eq!(r.outcome, SessionOutcome::Cancelled);
-    assert!(!dir.exists());
+    assert!(!dir.exists(), "記録先も一時フォルダも残らない");
+    assert!(
+        r.events
+            .iter()
+            .any(|e| matches!(e, EngineEvent::NoteReceived { .. })),
+        "演奏の途中で閉じた"
+    );
 }
 
 /// 時計で進む回（Live）も、同じ採点と記録の経路を通る。テンポ 600 で約 1 秒。

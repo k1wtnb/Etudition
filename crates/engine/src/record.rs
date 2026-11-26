@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use etudition_core::perf::{PerfEvent, PerfKind};
-use etudition_core::scoring::RunResult;
+use etudition_core::scoring::{Items, RunEnd, RunResult};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -48,6 +48,30 @@ pub struct ClickRecord {
     pub scheduled_ns: i64,
 }
 
+/// `result.json` に保存する採点の結果（点数、合否、回の終わり）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResultRecord {
+    /// 採点規則の版。
+    pub rules_version: &'static str,
+    /// 回の終わり。
+    pub end: RunEnd,
+    /// 3項目の点数（止まった回は `None`）。
+    pub items: Option<Items>,
+    /// 合否（止まった回は `None`）。
+    pub passed: Option<bool>,
+}
+
+impl From<&RunResult> for ResultRecord {
+    fn from(r: &RunResult) -> ResultRecord {
+        ResultRecord {
+            rules_version: r.rules_version,
+            end: r.end,
+            items: r.items,
+            passed: r.passed,
+        }
+    }
+}
+
 /// `result.json` の中身（仕様書10章の「`result.json` に入れるもの」）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RunRecord {
@@ -65,8 +89,8 @@ pub struct RunRecord {
     pub events: Vec<EventRecord>,
     /// クリック（1a-5）。
     pub clicks: Vec<ClickRecord>,
-    /// 採点の結果（無効の回は `None`）。
-    pub result: Option<RunResult>,
+    /// 採点の結果のうち、決まっている項目（無効の回は `None`）。音ごとの判定は保存しない（仕様書10章では提案）。
+    pub result: Option<ResultRecord>,
     /// 無効の理由（REQ-103、REQ-104、REQ-107）。
     pub invalid_reason: Option<String>,
     /// 受信のあふれの数（REQ-104）。
@@ -138,10 +162,10 @@ fn write_run_inner(
     if let Some(parent) = dir.parent() {
         fs::create_dir_all(parent).map_err(|e| err("記録先のフォルダを作れない", &e))?;
     }
-    if partial.exists() {
-        fs::remove_dir_all(&partial).map_err(|e| err("前の書きかけを消せない", &e))?;
-    }
-    fs::create_dir(&partial).map_err(|e| err("一時フォルダを作れない", &e))?;
+    // 一時フォルダがすでにあれば（同じ記録先へほかが書いている、または前の書きかけ）、消さずに失敗にする。
+    // 消してよいのは、ここで作った一時フォルダだけ
+    fs::create_dir(&partial)
+        .map_err(|e| err("一時フォルダを作れない（すでにあるか、書けない）", &e))?;
     let written = (|| -> Result<(), RecordError> {
         if let Some(r) = json {
             let text = serde_json::to_string_pretty(r).map_err(|e| err("JSON にできない", &e))?;

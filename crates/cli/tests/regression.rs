@@ -20,7 +20,7 @@ use etudition_engine::session::{
     EngineEvent, PracticeSetup, RunMode, SessionOutcome, open_session,
 };
 
-const T1: &[u8] = include_bytes!("../../../fixtures/1a/t1.musicxml");
+use etudition_cli::errors::T1;
 const S: i64 = 1_000_000_000;
 
 fn expansion() -> Expansion {

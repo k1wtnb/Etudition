@@ -1,10 +1,14 @@
 //! 誤り入りの MIDI を作る（計画 1a-3、REQ-069）。
 //!
 //! お手本（展開済みの鳴る音）から、楽譜どおりの MIDI（弱起の音から始まる形）を作り、誤りを入れる。
-//! 誤りの種類と期待する減点は [`CASES`]（採点の仕様 v0 の 9-2 の表の行に対応）。
+//! 誤りの種類と期待する減点は [`CASES`]（採点の仕様 v0 の 9-2 の表の行に対応）。期待値は合成の楽譜 T1
+//! （`fixtures/1a/t1.musicxml`）のもので、道具も T1 だけを受け付ける（任意の曲の期待値は計算しない）。
 
 use etudition_core::expand::Expansion;
 use etudition_core::quarters::Quarters;
+
+/// 道具が受け付ける楽譜（T1）。
+pub const T1: &[u8] = include_bytes!("../../../fixtures/1a/t1.musicxml");
 
 /// MIDI の四分音符あたりの tick。
 pub const PPQ: i64 = 960;
@@ -145,6 +149,24 @@ pub const CASES: &[ErrorCase] = &[
             len: q(2, 5),
         }],
         expected: (0, 0, 1, 10),
+    },
+    ErrorCase {
+        name: "length-at-half",
+        row: "ST-09",
+        errors: &[ErrorKind::Length {
+            index: 1,
+            len: q(1, 2),
+        }],
+        expected: (0, 0, 0, 10),
+    },
+    ErrorCase {
+        name: "length-at-one-and-half",
+        row: "ST-09",
+        errors: &[ErrorKind::Length {
+            index: 1,
+            len: q(3, 2),
+        }],
+        expected: (0, 0, 0, 10),
     },
     ErrorCase {
         name: "too-long",
