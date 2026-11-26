@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
 use etudition_core::expand::{Expansion, check_playable, expand};
+use etudition_core::meter::Meter;
 use etudition_core::rules::RULES_V0;
 use etudition_core::score::read_score;
 use etudition_core::scoring::{EndKind, RunResult};
@@ -143,10 +144,13 @@ fn feed(score: &[u8], midi: &[u8], t: Timing, dir: &Path, o: Opts) -> Run {
         expansion: e,
         score_hash: score_hash(score),
         timing: t,
-        count_in_beats: 4,
+        meter: Meter {
+            beats: 4,
+            beat_type: 4,
+        },
         correction_ns: o.correction_ns,
         record_dir: dir.to_path_buf(),
-        rules: &RULES_V0,
+        rules: RULES_V0,
     };
     let open = open_session(setup, Box::new(input)).expect("開けるはず");
     let seen = Mutex::new(Vec::new());

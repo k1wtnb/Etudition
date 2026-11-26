@@ -99,6 +99,8 @@ pub struct ScoreView {
     pub written: Vec<WrittenNoteView>,
     /// お手本の音（並びは採点の仕様 v0 の SR-01）。
     pub notes: Vec<RefNoteView>,
+    /// 音楽の拍（四分音符の数）。画面はテンポをこの音符で示し、入れる（楽譜の慣例。Q-29）。
+    pub beat: QuartersView,
 }
 
 impl ScoreView {
@@ -107,6 +109,7 @@ impl ScoreView {
         xml: String,
         written: &[WrittenNote],
         sounding: &[SoundingNote],
+        beat: Quarters,
     ) -> Result<ScoreView, String> {
         let written = written
             .iter()
@@ -146,6 +149,7 @@ impl ScoreView {
             xml,
             written,
             notes,
+            beat: quarters(beat)?,
         })
     }
 }
@@ -538,7 +542,13 @@ mod tests {
         ))
         .unwrap();
         let e = etudition_core::expand::expand(&loaded.score);
-        let v = ScoreView::new(String::new(), &loaded.score.notes, &e.sounding).unwrap();
+        let v = ScoreView::new(
+            String::new(),
+            &loaded.score.notes,
+            &e.sounding,
+            Quarters::new(1, 1),
+        )
+        .unwrap();
         assert_eq!(v.written.len(), loaded.score.notes.len());
         assert_eq!(v.written[0].id, "P1/m0/v1/n0");
         assert_eq!(v.notes.len(), e.sounding.len());

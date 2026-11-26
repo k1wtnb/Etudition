@@ -12,7 +12,15 @@ import {
   type UiTime,
 } from "./lib/commands";
 import { type Outcome, outcomeOf } from "./lib/outcome";
-import { markKind, markStyle, noteName, quartersAt } from "./lib/present";
+import {
+  beatSymbol,
+  markKind,
+  markStyle,
+  noteName,
+  quartersAt,
+  quarterTempo,
+  tempoInBeats,
+} from "./lib/present";
 import { Sheet, type SheetSummary } from "./lib/sheet";
 
 // 流し込みの操作は開発用だけに出す（REQ-106。通常のビルドにはコマンドもない。AC-23）
@@ -20,6 +28,8 @@ const devFeed = import.meta.env.DEV;
 
 let scorePath = $state("");
 let midiPath = $state("");
+// テンポは楽譜の慣例で、音楽の拍の音符で示して入れる（6/8 は ♩.）。渡すときに四分音符／分に直す（Q-29）
+let beat = $state({ num: 1, den: 1 });
 let bpm = $state(60);
 let summary: SheetSummary | null = $state(null);
 let running = $state(false);
@@ -46,6 +56,9 @@ async function load() {
   try {
     const score = await loadScore(scorePath.trim());
     summary = (await sheet?.load(score)) ?? null;
+    beat = score.beat;
+    // 曲ごとの案が出るまでの仮の ♩＝60 を、拍の音符の数に直す（B06）
+    bpm = tempoInBeats(60, beat);
   } catch (e) {
     message = String(e);
   }
@@ -123,7 +136,7 @@ function begin(): boolean {
 async function start() {
   if (!begin()) return;
   try {
-    await startPractice({ num: bpm, den: 1 }, onEvent);
+    await startPractice(quarterTempo(bpm, beat), onEvent);
   } catch (e) {
     running = false;
     message = `始められない：${e}`;
@@ -133,7 +146,7 @@ async function start() {
 async function feed() {
   if (!begin()) return;
   try {
-    await feedMidiFile(midiPath.trim(), { num: bpm, den: 1 }, onEvent);
+    await feedMidiFile(midiPath.trim(), quarterTempo(bpm, beat), onEvent);
   } catch (e) {
     running = false;
     message = `始められない：${e}`;
@@ -156,7 +169,7 @@ async function stop() {
   <section class="controls">
     <label>楽譜（MusicXML のパス）<input bind:value={scorePath} size="50" /></label>
     <button type="button" onclick={load} disabled={running}>読む</button>
-    <label>テンポ（四分音符／分）<input type="number" min="1" bind:value={bpm} /></label>
+    <label>テンポ（<span class="beat">{beatSymbol(beat)}</span>＝）<input type="number" min="1" bind:value={bpm} /></label>
     <button type="button" onclick={start} disabled={running}>始める</button>
     <button type="button" onclick={stop} disabled={!running}>止める</button>
   </section>
@@ -231,6 +244,12 @@ async function stop() {
   }
   .message {
     color: #cf222e;
+  }
+  .beat {
+    font-family: "Segoe UI Symbol", "Noto Music", serif;
+    /* 二分音符などの記号は小さく描かれるので、読める大きさにする */
+    font-size: 1.4em;
+    line-height: 1;
   }
   .verdict {
     font-size: 1.3em;

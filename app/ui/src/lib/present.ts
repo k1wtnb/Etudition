@@ -92,3 +92,34 @@ const LABEL_LINE = 13;
 export function labelY(top: number, row: number): number {
   return top - 9 - row * LABEL_LINE;
 }
+
+/** 四分音符の数（分子、分母）。 */
+type Beat = { num: number; den: number };
+
+const NOTE_SYMBOLS: [number, string][] = [
+  [4, "𝅝"],
+  [2, "𝅗𝅥"],
+  [1, "♩"],
+  [1 / 2, "♪"],
+  [1 / 4, "𝅘𝅥𝅯"],
+];
+
+/** 音楽の拍の音符の記号（付点は「.」を付ける）。楽譜の慣例でテンポを示すため（Q-29）。 */
+export function beatSymbol(beat: Beat): string {
+  const q = beat.num / beat.den;
+  for (const [v, s] of NOTE_SYMBOLS) {
+    if (q === v) return s;
+    if (q === v * 1.5) return `${s}.`;
+  }
+  return `${beat.num}/${beat.den} 四分音符`;
+}
+
+/** 拍の音符で入れたテンポ（拍／分）を、四分音符／分（分子、分母）に直す。 */
+export function quarterTempo(bpm: number, beat: Beat): TempoView {
+  return { num: bpm * beat.num, den: beat.den };
+}
+
+/** 四分音符／分のテンポを、拍の音符の数（拍／分。整数に丸める）に直す。 */
+export function tempoInBeats(quarterBpm: number, beat: Beat): number {
+  return Math.round((quarterBpm * beat.den) / beat.num);
+}

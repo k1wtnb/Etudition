@@ -8,9 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use etudition_core::expand::{Expansion, check_playable, expand};
-use etudition_core::quarters::Quarters;
-use etudition_core::rules::RULES_V0;
-use etudition_core::score::{Score, read_score};
+use etudition_core::meter::Meter;
+use etudition_core::rules::{Rules, rules_v1};
+use etudition_core::score::read_score;
 use etudition_core::timing::{Tempo, Timing, span_to_ns};
 use etudition_engine::input::{MidiInput, StartError};
 use etudition_engine::record::score_hash;
@@ -26,8 +26,8 @@ pub struct Loaded {
     pub bytes: Vec<u8>,
     /// お手本。
     pub expansion: Expansion,
-    /// 前カウントの拍の数（[`count_in_beats`]）。
-    pub count_in_beats: u32,
+    /// 拍子（クリック、音楽の拍、1小節の長さ。Q-29）。
+    pub meter: Meter,
 }
 
 /// アプリの状態。
@@ -74,37 +74,34 @@ pub fn load(bytes: Vec<u8>) -> Result<(Loaded, ScoreView), String> {
             .collect();
         format!("採点に使えない楽譜：{}", list.join("、"))
     })?;
-    let count_in_beats = count_in_beats(&loaded.score);
-    let view = ScoreView::new(loaded.xml, &loaded.score.notes, &expansion.sounding)?;
+    let meter = Meter::of(&loaded.score);
+    let view = ScoreView::new(
+        loaded.xml,
+        &loaded.score.notes,
+        &expansion.sounding,
+        meter.beat(),
+    )?;
     Ok((
         Loaded {
             bytes,
             expansion,
-            count_in_beats,
+            meter,
         },
         view,
     ))
 }
 
-/// 前カウントの拍の数：どの拍子でも1小節（Q-29。人間の回答 2026-11-26）。
-/// 拍は四分音符で数え（採点の仕様 v0 の SR-05）、1小節の長さは弱起でない最初の小節の拍子から取る（書かれた音の長さではない）。
-/// 分母が 4 でない拍子（6/8、2/2 など）のクリックの単位は、まだ決まっていない（それまでは四分音符で仮に数える）。
-pub fn count_in_beats(score: &Score) -> u32 {
-    score
-        .measures
-        .iter()
-        .find(|m| !m.implicit)
-        .and_then(|m| u32::try_from(m.time_length.num() / m.time_length.den()).ok())
-        .filter(|&b| b > 0)
-        .unwrap_or(4)
+/// この楽譜の採点規則：v1（タイミングの許容幅は音楽の拍の 1/8。Q-29、人間の回答 2026-11-26）。
+pub fn rules_of(loaded: &Loaded) -> Rules {
+    rules_v1(loaded.meter.beat())
 }
 
-/// 練習のテンポと前カウントから、楽譜の位置 0 の時刻を決める（原点は前カウントの最初のクリック）。
+/// 練習のテンポと前カウント（1小節）から、楽譜の位置 0 の時刻を決める（原点は前カウントの最初のクリック）。
 pub fn timing_of(tempo: TempoView, loaded: &Loaded) -> Result<Timing, String> {
     let tempo = Tempo::new(tempo.num, tempo.den).ok_or("テンポが正でない")?;
     Ok(Timing {
         tempo,
-        origin_ns: span_to_ns(&tempo, Quarters::new(i64::from(loaded.count_in_beats), 1)),
+        origin_ns: span_to_ns(&tempo, loaded.meter.measure()),
     })
 }
 
@@ -119,10 +116,10 @@ pub fn open(
         expansion: loaded.expansion.clone(),
         score_hash: score_hash(&loaded.bytes),
         timing,
-        count_in_beats: loaded.count_in_beats,
+        meter: loaded.meter,
         correction_ns: 0,
         record_dir,
-        rules: &RULES_V0,
+        rules: rules_of(loaded),
     };
     open_session(setup, input)
 }
@@ -228,6 +225,7 @@ pub fn feed_midi_file<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use etudition_core::quarters::Quarters;
     use tauri::ipc::{CallbackFn, InvokeBody};
     use tauri::test::{
         INVOKE_KEY, MockRuntime, get_ipc_response, mock_builder, mock_context, noop_assets,
@@ -313,25 +311,53 @@ mod tests {
         }
     }
 
+    /// Q-29（人間の回答 2026-11-26）：前カウントはどの拍子でも1小節。クリックは分母の音符ごとに分子の数。
+    /// 楽譜の位置 0 はクリックの数ではなく1小節の長さから決める。採点は v1（タイミングの許容幅は音楽の拍の 1/8）。
     #[test]
     fn count_in_is_one_measure() {
+        let at60 = TempoView { num: 60, den: 1 };
         let (t1, _) = load(T1.to_vec()).unwrap();
-        assert_eq!(t1.count_in_beats, 4);
-        let t = timing_of(TempoView { num: 60, den: 1 }, &t1).unwrap();
-        assert_eq!(t.origin_ns, 4_000_000_000);
+        assert_eq!(
+            (t1.meter.clicks(), t1.meter.click_unit()),
+            (4, Quarters::new(1, 1))
+        );
+        assert_eq!(timing_of(at60, &t1).unwrap().origin_ns, 4_000_000_000);
         // 弱起の小節は数えない（07 は 4/4）
-        assert_eq!(load(PICKUP.to_vec()).unwrap().0.count_in_beats, 4);
-        // Q-29（人間の回答 2026-11-26）：どの拍子でも1小節。3/4 は3拍
-        let three = r#"<?xml version="1.0"?><score-partwise><part-list/><part id="P1"><measure number="1"><attributes><divisions>1</divisions><time><beats>3</beats><beat-type>4</beat-type></time></attributes><note><pitch><step>C</step><octave>4</octave></pitch><duration>3</duration></note></measure></part></score-partwise>"#;
-        assert_eq!(load(three.as_bytes().to_vec()).unwrap().0.count_in_beats, 3);
-        // 2/4 は2拍
-        let two = three
-            .replace("<beats>3</beats>", "<beats>2</beats>")
-            .replace("<duration>3</duration>", "<duration>2</duration>");
-        assert_eq!(load(two.into_bytes()).unwrap().0.count_in_beats, 2);
-        // 書かれた音が小節に足りなくても（3/4 に四分音符2つ）、拍子から3拍
-        let short = three.replace("<duration>3</duration>", "<duration>2</duration>");
-        assert_eq!(load(short.into_bytes()).unwrap().0.count_in_beats, 3);
+        assert_eq!(load(PICKUP.to_vec()).unwrap().0.meter.clicks(), 4);
+        let xml = |beats: u32, beat_type: u32, duration: u32| {
+            format!(
+                r#"<?xml version="1.0"?><score-partwise><part-list/><part id="P1"><measure number="1"><attributes><divisions>2</divisions><time><beats>{beats}</beats><beat-type>{beat_type}</beat-type></time></attributes><note><pitch><step>C</step><octave>4</octave></pitch><duration>{duration}</duration></note></measure></part></score-partwise>"#
+            )
+        };
+        // (拍子, 書かれた音の長さ, クリックの数, 位置 0 の時刻（♩＝60）)
+        let cases = [
+            ((3, 4), 6, 3, 3_000_000_000),
+            ((2, 4), 4, 2, 2_000_000_000),
+            // 書かれた音が小節に足りなくても（3/4 に四分音符2つ）、拍子から
+            ((3, 4), 4, 3, 3_000_000_000),
+            // 6/8 は八分音符で6回、位置 0 は3秒（6秒ではない）
+            ((6, 8), 6, 6, 3_000_000_000),
+            ((2, 2), 8, 2, 4_000_000_000),
+            ((3, 8), 3, 3, 1_500_000_000),
+        ];
+        for ((beats, beat_type), duration, clicks, origin) in cases {
+            let (l, _) = load(xml(beats, beat_type, duration).into_bytes()).unwrap();
+            assert_eq!(l.meter.clicks(), clicks, "{beats}/{beat_type}");
+            assert_eq!(
+                timing_of(at60, &l).unwrap().origin_ns,
+                origin,
+                "{beats}/{beat_type}"
+            );
+        }
+        // 採点は v1。6/8 のタイミングの許容幅は付点四分音符の 1/8
+        let (six, view) = load(xml(6, 8, 6).into_bytes()).unwrap();
+        // 画面はテンポを音楽の拍の音符で示す（6/8 は付点四分音符 ＝ 1.5 四分音符）
+        assert_eq!((view.beat.num, view.beat.den), (3, 2));
+        let r = rules_of(&six);
+        assert_eq!(
+            (r.version, r.timing_tolerance),
+            ("v1", Quarters::new(3, 16))
+        );
     }
 
     /// 進んでいる回があれば、二度目の開始は断る。回が終わった印を付けたら、また始められる。

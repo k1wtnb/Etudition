@@ -68,6 +68,10 @@ pub struct Measure {
     pub length: Quarters,
     /// この小節に当たる拍子の長さ（四分音符の数。`time` がなければ 4/4）。前カウントの拍の数に使う（B06）。
     pub time_length: Quarters,
+    /// この小節に当たる拍子の分子（`time` がなければ 4）。クリックと音楽の拍に使う（`meter`、Q-29）。
+    pub time_beats: i64,
+    /// この小節に当たる拍子の分母（`time` がなければ 4）。
+    pub time_beat_type: i64,
     /// `implicit="yes"`（弱起など、数えない小節）。
     pub implicit: bool,
     /// 左の小節線に前向きの繰り返し記号がある。
@@ -261,6 +265,7 @@ fn parse_xml(xml: &str) -> Result<Score, ReadError> {
 
     let mut divisions: Option<i64> = None;
     let mut time_length = Quarters::new(4, 1);
+    let mut time_sig: (i64, i64) = (4, 4);
     for (index, m) in part
         .children()
         .filter(|n| n.has_tag_name("measure"))
@@ -298,6 +303,7 @@ fn parse_xml(xml: &str) -> Result<Score, ReadError> {
                                 let beat_type: i64 =
                                     parse_int(child_text(a, "beat-type"), "beat-type")?;
                                 time_length = Quarters::new(beats * 4, beat_type);
+                                time_sig = (beats, beat_type);
                             }
                             n if IGNORED_ATTRIBUTES_CHILDREN.contains(&n) => {}
                             n => issue(n, "attributes の中の読まない要素".into()),
@@ -395,6 +401,7 @@ fn parse_xml(xml: &str) -> Result<Score, ReadError> {
             }
         }
         measure.time_length = time_length;
+        (measure.time_beats, measure.time_beat_type) = time_sig;
         measure.length = if end == Quarters::ZERO {
             time_length
         } else {

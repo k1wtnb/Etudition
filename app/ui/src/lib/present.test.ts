@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MarkView } from "./bindings/MarkView";
 import {
+  beatSymbol,
   cursorStepAt,
   formatScore,
   labelY,
@@ -9,6 +10,8 @@ import {
   markStyle,
   noteName,
   quartersAt,
+  quarterTempo,
+  tempoInBeats,
 } from "./present";
 
 describe("印の種類と形（AC-18 の AI の部分）", () => {
@@ -123,5 +126,29 @@ describe("印の文字の高さ", () => {
     expect(labelY(top, 1)).toBe(78);
     // 1行の高さは文字の大きさ（11）より大きい
     expect(labelY(top, 0) - labelY(top, 1)).toBeGreaterThan(11);
+  });
+});
+
+describe("テンポの表示（楽譜の慣例。Q-29、人間の回答 2026-11-26）", () => {
+  it("音楽の拍の音符の記号", () => {
+    expect(beatSymbol({ num: 1, den: 1 })).toBe("♩");
+    expect(beatSymbol({ num: 3, den: 2 })).toBe("♩.");
+    expect(beatSymbol({ num: 1, den: 2 })).toBe("♪");
+    expect(beatSymbol({ num: 2, den: 1 })).toBe("𝅗𝅥");
+    expect(beatSymbol({ num: 3, den: 1 })).toBe("𝅗𝅥.");
+    expect(beatSymbol({ num: 3, den: 4 })).toBe("♪.");
+  });
+
+  it("拍の音符で入れたテンポを、四分音符／分に直して渡す（6/8 の ♩.＝40 は ♩＝60）", () => {
+    expect(quarterTempo(40, { num: 3, den: 2 })).toEqual({ num: 120, den: 2 });
+    expect(quarterTempo(60, { num: 1, den: 1 })).toEqual({ num: 60, den: 1 });
+    expect(quarterTempo(30, { num: 2, den: 1 })).toEqual({ num: 60, den: 1 });
+  });
+
+  it("仮の ♩＝60 を、拍の音符の数に直して初めの値にする", () => {
+    expect(tempoInBeats(60, { num: 3, den: 2 })).toBe(40);
+    expect(tempoInBeats(60, { num: 2, den: 1 })).toBe(30);
+    expect(tempoInBeats(60, { num: 1, den: 2 })).toBe(120);
+    expect(tempoInBeats(60, { num: 3, den: 4 })).toBe(80);
   });
 });

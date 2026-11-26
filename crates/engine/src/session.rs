@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use etudition_core::expand::Expansion;
+use etudition_core::meter::Meter;
 use etudition_core::perf::{PerfEvent, PerfKind};
 use etudition_core::rules::Rules;
 use etudition_core::scoring::{
@@ -33,14 +34,14 @@ pub struct PracticeSetup {
     pub score_hash: String,
     /// 練習のテンポと、楽譜の位置 0 の時刻。
     pub timing: Timing,
-    /// 前カウントの拍の数（1a-5 で使う）。
-    pub count_in_beats: u32,
+    /// 拍子（前カウントとクリックの数と間隔。1a-5 で使う。Q-29）。
+    pub meter: Meter,
     /// 補正の値（ns。遅れを正で持つ。1a は 0）。
     pub correction_ns: i64,
     /// この回の記録先のフォルダ（まだないこと）。
     pub record_dir: PathBuf,
-    /// 採点規則の版。
-    pub rules: &'static Rules,
+    /// 採点規則（版と値。v1 は楽譜の拍から作る）。
+    pub rules: Rules,
 }
 
 /// 回の進め方。
@@ -193,7 +194,7 @@ impl OpenSession {
             reference: &self.setup.expansion.sounding,
             timing: self.setup.timing,
             events: perf,
-            rules: self.setup.rules,
+            rules: &self.setup.rules,
         }
     }
 
