@@ -11,7 +11,8 @@ use etudition_core::rules::RULES_V0;
 use etudition_core::score::read_score;
 use etudition_core::scoring::{EndKind, RunResult};
 use etudition_core::timing::{Tempo, Timing};
-use etudition_engine::input::FileInput;
+use etudition_engine::click::{AudioOut, FakeOut};
+use etudition_engine::input::{FileInput, StartError};
 use etudition_engine::record::{RecordStatus, score_hash};
 use etudition_engine::session::{
     EngineEvent, InvalidReason, PracticeSetup, RunMode, SessionOutcome, open_session,
@@ -124,6 +125,25 @@ struct Opts {
     stop_now: bool,
     /// 最初のノートオンの通知で終了を要求する（演奏の途中で閉じる）。
     stop_on_first_note: bool,
+    /// クリックの音（1a-5）。
+    audio: Audio,
+}
+
+/// 試験の音声出力。
+#[derive(Clone, Copy)]
+enum Audio {
+    None,
+    /// cpal の時刻は時計 ＋ 5 秒、遅れ 20 ms。
+    Fake,
+    LostAfter(usize),
+}
+
+fn audio_of(a: Audio) -> Option<Box<dyn AudioOut + Send>> {
+    match a {
+        Audio::None => None,
+        Audio::Fake => Some(Box::new(FakeOut::new(5 * S, 20_000_000))),
+        Audio::LostAfter(n) => Some(Box::new(FakeOut::new(0, 0).lost_after(n))),
+    }
 }
 
 const FEED: Opts = Opts {
@@ -132,6 +152,7 @@ const FEED: Opts = Opts {
     mode: RunMode::Feed,
     stop_now: false,
     stop_on_first_note: false,
+    audio: Audio::None,
 };
 
 fn feed(score: &[u8], midi: &[u8], t: Timing, dir: &Path, o: Opts) -> Run {
@@ -152,7 +173,7 @@ fn feed(score: &[u8], midi: &[u8], t: Timing, dir: &Path, o: Opts) -> Run {
         record_dir: dir.to_path_buf(),
         rules: RULES_V0,
     };
-    let open = open_session(setup, Box::new(input)).expect("開けるはず");
+    let open = open_session(setup, Box::new(input), audio_of(o.audio)).expect("開けるはず");
     let seen = Mutex::new(Vec::new());
     let stop = AtomicBool::new(o.stop_now);
     let notify = |ev: EngineEvent| {
@@ -531,4 +552,141 @@ fn stop_then_disconnect_writes_nothing() {
     );
     assert_eq!(r.outcome, SessionOutcome::Cancelled);
     assert!(!dir.exists());
+}
+
+fn setup_for(score: &[u8], t: Timing, dir: &Path) -> PracticeSetup {
+    PracticeSetup {
+        expansion: expansion(score),
+        score_hash: score_hash(score),
+        timing: t,
+        meter: Meter {
+            beats: 4,
+            beat_type: 4,
+        },
+        correction_ns: 0,
+        record_dir: dir.to_path_buf(),
+        rules: RULES_V0,
+    }
+}
+
+/// AC-15：偽の音声出力で、クリックの予定時刻、cpal の時刻の組、鳴った時刻（`Instant` の軸）が `result.json` に計算どおり残る。
+/// クリックは通知にも出る（同じ時刻ならノートオンより先）。回の終わりより後のクリックは記録しない。
+#[test]
+fn clicks_are_notified_and_recorded_with_cpal_times() {
+    let dir = tmp("clicks");
+    let t = timing(60, 4 * S);
+    let e = expansion(TIE);
+    let r = feed(
+        TIE,
+        &as_written_midi(&e, true),
+        t,
+        &dir.join("run"),
+        Opts {
+            audio: Audio::Fake,
+            ..FEED
+        },
+    );
+    let end = scored(&r).end.at_ns;
+    let clicks: Vec<(u32, bool, i64)> = r
+        .events
+        .iter()
+        .filter_map(|ev| match ev {
+            EngineEvent::Click {
+                index,
+                count_in,
+                scheduled_ns,
+            } => Some((*index, *count_in, *scheduled_ns)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        &clicks[..5],
+        &[
+            (0, true, 0),
+            (1, true, S),
+            (2, true, 2 * S),
+            (3, true, 3 * S),
+            (4, false, 4 * S)
+        ]
+    );
+    assert!(clicks.iter().all(|c| c.2 <= end));
+    // 4 秒のクリックは、4 秒のノートオンより先に知らせる
+    let first_note = r
+        .events
+        .iter()
+        .position(|ev| matches!(ev, EngineEvent::NoteReceived { .. }))
+        .unwrap();
+    let click4 = r
+        .events
+        .iter()
+        .position(|ev| matches!(ev, EngineEvent::Click { index: 4, .. }))
+        .unwrap();
+    assert!(click4 < first_note);
+
+    let Some(EngineEvent::Ended {
+        record: RecordStatus::Written(files),
+        ..
+    }) = r.events.last()
+    else {
+        panic!("記録したはず: {:?}", r.events.last());
+    };
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(files.json.as_ref().unwrap()).unwrap()).unwrap();
+    let rec = json["clicks"].as_array().unwrap();
+    assert_eq!(rec.len(), clicks.len());
+    let c1 = &rec[1];
+    assert_eq!(c1["index"], 1);
+    assert_eq!(c1["scheduled_ns"], S);
+    // コールバックは予定の 20 ms 前、再生は予定ちょうど（cpal の軸は 5 秒ずれ）。鳴った時刻は予定と同じ
+    assert_eq!(c1["cpal_callback_ns"], 5 * S + S - 20_000_000);
+    assert_eq!(c1["cpal_playback_ns"], 5 * S + S);
+    assert_eq!(c1["at_ns"], S);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// AC-46：出力先がなければ始めず（`NoAudioOutput`）、ファイルを作らない。
+#[test]
+fn missing_audio_output_does_not_start() {
+    let dir = tmp("no-audio");
+    let t = timing(60, 4 * S);
+    let e = expansion(TIE);
+    let input = FileInput::new(&as_written_midi(&e, true), &e, &t).unwrap();
+    let got = open_session(
+        setup_for(TIE, t, &dir.join("run")),
+        Box::new(input),
+        Some(Box::new(FakeOut::missing())),
+    );
+    assert_eq!(got.err(), Some(StartError::NoAudioOutput));
+    assert!(!dir.join("run").exists());
+}
+
+/// AC-46：演奏の途中で出力先を失うと、その回は無効になり、点数と合否を出さず、`result.json` に理由が書かれる。
+#[test]
+fn lost_audio_output_makes_the_run_invalid() {
+    let dir = tmp("audio-lost");
+    let t = timing(60, 4 * S);
+    let e = expansion(TIE);
+    let r = feed(
+        TIE,
+        &as_written_midi(&e, true),
+        t,
+        &dir.join("run"),
+        Opts {
+            audio: Audio::LostAfter(2),
+            ..FEED
+        },
+    );
+    assert_eq!(r.outcome, SessionOutcome::Invalid(InvalidReason::AudioLost));
+    let Some(EngineEvent::Invalid {
+        record: RecordStatus::Written(files),
+        ..
+    }) = r.events.last()
+    else {
+        panic!("無効の回を記録したはず: {:?}", r.events.last());
+    };
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(files.json.as_ref().unwrap()).unwrap()).unwrap();
+    assert_eq!(json["invalid_reason"], "音声の出力先がなくなった");
+    assert!(json["result"].is_null());
+    let _ = std::fs::remove_dir_all(&dir);
 }

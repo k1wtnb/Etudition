@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MarkView } from "./bindings/MarkView";
 import {
+  anchorOf,
   beatSymbol,
   cursorStepAt,
   formatScore,
@@ -150,5 +151,14 @@ describe("テンポの表示（楽譜の慣例。Q-29、人間の回答 2026-11-
     expect(tempoInBeats(60, { num: 2, den: 1 })).toBe(30);
     expect(tempoInBeats(60, { num: 1, den: 2 })).toBe(120);
     expect(tempoInBeats(60, { num: 3, den: 4 })).toBe(80);
+  });
+});
+
+describe("カーソルをクリックに沿わせる（AC-17。1a-5）", () => {
+  it("クリックを受けた画面の時刻から、そのクリックの予定時刻を引いた時刻を、時刻 0 とみなす", () => {
+    // 画面の 5000 ms に、予定時刻 1.5 秒のクリックを受けた → 時刻 0 は 3500 ms
+    expect(anchorOf(5000, { ns: 1_500_000_000 })).toBe(3500);
+    // 前カウントの最初（0 秒）のクリックなら、受けた時刻がそのまま時刻 0
+    expect(anchorOf(1234, { ns: 0 })).toBe(1234);
   });
 });

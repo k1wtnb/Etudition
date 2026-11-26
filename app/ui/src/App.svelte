@@ -13,6 +13,7 @@ import {
 } from "./lib/commands";
 import { type Outcome, outcomeOf } from "./lib/outcome";
 import {
+  anchorOf,
   beatSymbol,
   markKind,
   markStyle,
@@ -82,7 +83,8 @@ function onEvent(ev: LiveEvent) {
       frame = requestAnimationFrame(tick);
       break;
     case "click":
-      // クリックは 1a-5 で来る。カーソルは origin と tempo から求めた拍の位置で進める（B0 の5章）
+      // クリックを受けるたびに、カーソルの時刻の基準をクリックの予定時刻に合わせ直す（AC-17。B0 の5章）
+      if (clock) clock.startedAt = anchorOf(performance.now(), ev.at);
       break;
     case "note_received":
       received = { note: ev.note, count: (received?.count ?? 0) + 1 };

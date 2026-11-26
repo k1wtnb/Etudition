@@ -39,13 +39,20 @@ pub struct EventRecord {
     pub bytes: Vec<u8>,
 }
 
-/// クリック1つの記録（1a-5 で中身を足す）。
+/// クリック1つの記録（AC-15、採点の仕様 v0 の 1-3）。補正前の値（予定時刻、cpal の時刻の組）と、
+/// 補正後の値（`EngineClock` の軸で鳴った時刻）を両方持つ。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ClickRecord {
     /// 何番目のクリックか（0 始まり）。
     pub index: u32,
     /// 予定時刻（ns）。
     pub scheduled_ns: i64,
+    /// そのクリックを入れたコールバックの、cpal のコールバックの時刻（ns。cpal の軸）。
+    pub cpal_callback_ns: i64,
+    /// 同じく、バッファの再生の時刻（ns。cpal の軸）。
+    pub cpal_playback_ns: i64,
+    /// 鳴った時刻（ns。`EngineClock` の軸）。
+    pub at_ns: i64,
 }
 
 /// `result.json` に保存する採点の結果（点数、合否、回の終わり）。

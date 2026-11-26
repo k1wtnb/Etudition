@@ -60,7 +60,7 @@ fn run_case(c: &ErrorCase, dir: &std::path::Path) -> (RunResult, Option<serde_js
         record_dir: dir.to_path_buf(),
         rules: RULES_V0,
     };
-    let open = open_session(setup, Box::new(input)).expect("開けるはず");
+    let open = open_session(setup, Box::new(input), None).expect("開けるはず");
     let last = std::sync::Mutex::new(None);
     let outcome = open.run(
         RunMode::Feed,
