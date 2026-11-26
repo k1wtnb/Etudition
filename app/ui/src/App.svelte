@@ -247,6 +247,9 @@ async function stop() {
   }
   .beat {
     font-family: "Segoe UI Symbol", "Noto Music", serif;
+    /* 二分音符などの記号は小さく描かれるので、読める大きさにする */
+    font-size: 1.4em;
+    line-height: 1;
   }
   .verdict {
     font-size: 1.3em;
