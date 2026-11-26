@@ -4,6 +4,7 @@
 //! `wasm32-unknown-unknown` 向けにもビルドして、この約束を機械で確かめる。
 
 pub mod expand;
+pub mod meter;
 pub mod perf;
 pub mod quarters;
 pub mod rules;

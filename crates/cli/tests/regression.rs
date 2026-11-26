@@ -10,6 +10,7 @@ use std::sync::atomic::AtomicBool;
 
 use etudition_cli::errors::{CASES, ErrorCase, make_error_midi};
 use etudition_core::expand::{Expansion, check_playable, expand};
+use etudition_core::meter::Meter;
 use etudition_core::rules::RULES_V0;
 use etudition_core::score::read_score;
 use etudition_core::scoring::{RunResult, TimingResult};
@@ -51,10 +52,13 @@ fn run_case(c: &ErrorCase, dir: &std::path::Path) -> (RunResult, Option<serde_js
         expansion: e,
         score_hash: score_hash(T1),
         timing,
-        count_in_beats: 4,
+        meter: Meter {
+            beats: 4,
+            beat_type: 4,
+        },
         correction_ns: 0,
         record_dir: dir.to_path_buf(),
-        rules: &RULES_V0,
+        rules: RULES_V0,
     };
     let open = open_session(setup, Box::new(input)).expect("開けるはず");
     let last = std::sync::Mutex::new(None);
