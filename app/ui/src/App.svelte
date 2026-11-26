@@ -193,11 +193,6 @@ async function stop() {
             {/each}
           </tbody>
         </table>
-        <p>
-          {outcome.mistakes.length > 0
-            ? `演奏後の判定で間違えた音（${outcome.mistakes.length} 音）を楽譜に示しました。`
-            : "演奏後の判定で間違えた音はありません。"}
-        </p>
       {:else if outcome.kind === "stopped"}
         <p class="verdict">止まったので、点数は出しません。止まった位置までの間違えた場所を楽譜に示しました。</p>
         {#if outcome.extras > 0}
