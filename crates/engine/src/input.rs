@@ -2,7 +2,7 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -69,6 +69,9 @@ impl fmt::Display for StartError {
 pub trait MidiInput: Send {
     /// 入力を開き、`clock` で時刻を付けて `sink` に送り始める。
     fn open(&mut self, clock: EngineClock, sink: InputSink) -> Result<(), StartError>;
+    /// 閉じずに、呼んだときまでに受けた分（切断の知らせを含む）を送り先へ渡し切ってから戻る。
+    /// 中継を持たない入力は何もしない。
+    fn flush(&mut self) {}
     /// 入力を閉じる。
     fn close(&mut self);
 }
@@ -283,6 +286,8 @@ const MIDIR_WATCH: Duration = Duration::from_millis(500);
 pub struct MidirInput {
     conn: Option<midir::MidiInputConnection<()>>,
     stop: Arc<AtomicBool>,
+    /// 渡し切りの要求の番号と、済んだ番号（`flush`）。
+    flush: Arc<(AtomicU64, AtomicU64)>,
     worker: Option<JoinHandle<()>>,
     /// 開いた機器の名前。
     pub port_name: Option<String>,
@@ -300,6 +305,7 @@ impl MidirInput {
         MidirInput {
             conn: None,
             stop: Arc::new(AtomicBool::new(false)),
+            flush: Arc::new((AtomicU64::new(0), AtomicU64::new(0))),
             worker: None,
             port_name: None,
         }
@@ -356,6 +362,7 @@ impl MidiInput for MidirInput {
             )
             .map_err(|e| StartError::Other(format!("MIDI 機器を開けない: {e}")))?;
         let stop = Arc::clone(&self.stop);
+        let flush = Arc::clone(&self.flush);
         let mut producer = sink.producer;
         self.worker = Some(std::thread::spawn(move || {
             let mut last_watch = std::time::Instant::now();
@@ -368,6 +375,20 @@ impl MidiInput for MidirInput {
             loop {
                 // 送り先が満杯なら、捨てずに次の周回で入れ直す（ここはコールバックではないので待ってよい）
                 let stopping = stop.load(Ordering::Acquire);
+                let asked = flush.0.load(Ordering::SeqCst);
+                if asked > flush.1.load(Ordering::Acquire) {
+                    // 渡し切りの要求：要求より前に走り始めたコールバックが終わるのを待ち、全部渡してから済みにする
+                    while gate.1.load(Ordering::SeqCst) > 0 {
+                        std::thread::yield_now();
+                    }
+                    while !relay_input(&mut pending, &mut rx, &mut producer) {
+                        if stop.load(Ordering::Acquire) {
+                            break;
+                        }
+                        std::thread::sleep(MIDIR_RELAY_TICK);
+                    }
+                    flush.1.store(asked, Ordering::Release);
+                }
                 relay_input(&mut pending, &mut rx, &mut producer);
                 if stopping {
                     give_up(&pending, &rx);
@@ -402,6 +423,17 @@ impl MidiInput for MidirInput {
         self.conn = Some(conn);
         self.port_name = names.into_iter().nth(i);
         Ok(())
+    }
+
+    fn flush(&mut self) {
+        let Some(w) = self.worker.as_ref() else {
+            return;
+        };
+        let n = self.flush.0.fetch_add(1, Ordering::SeqCst) + 1;
+        // 中継が終わっていれば（切断を知らせた後など）、渡せるものはもう渡してある
+        while self.flush.1.load(Ordering::Acquire) < n && !w.is_finished() {
+            std::thread::sleep(MIDIR_RELAY_TICK);
+        }
     }
 
     fn close(&mut self) {

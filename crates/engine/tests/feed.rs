@@ -554,7 +554,7 @@ fn stop_then_disconnect_writes_nothing() {
     assert!(!dir.exists());
 }
 
-/// 最後のメッセージを、閉じるときに初めて渡す試験用の入力（受付を締めた後に中継が渡す分を作る。Astra の監査）。
+/// 最後のメッセージを、`flush`（受けた分を渡し切る要求）で初めて渡す試験用の入力（中継が遅れて渡す分を作る。Astra の監査）。
 struct HeldLastInput {
     msgs: Vec<etudition_engine::input::InputMsg>,
     producer: Option<etudition_engine::rtrb::Producer<etudition_engine::input::InputMsg>>,
@@ -573,18 +573,19 @@ impl etudition_engine::input::MidiInput for HeldLastInput {
         self.producer = Some(sink.producer);
         Ok(())
     }
-    fn close(&mut self) {
+    fn flush(&mut self) {
         if let Some(p) = self.producer.as_mut() {
             for m in self.msgs.drain(..) {
                 p.push(m).unwrap();
             }
         }
     }
+    fn close(&mut self) {}
 }
 
-/// 時計で進む回は、終わりが決まったら受付を締め、中継が最後に渡した音（終わり際のノートオフ）も採点と記録に入れる。
+/// 時計で進む回は、終わりが決まりそうになったら受けた分を渡し切らせ、中継が遅れて渡した音（終わり際のノートオフ）も採点と記録に入れる。
 #[test]
-fn live_mode_takes_what_arrives_when_input_closes() {
+fn live_mode_takes_what_arrives_when_input_flushes() {
     let dir = tmp("live-held");
     let t = timing(600, 0);
     let e = expansion(TIE);
@@ -614,6 +615,30 @@ fn live_mode_takes_what_arrives_when_input_closes() {
     assert!(
         events.iter().any(|e| e["raw_ns"] == last_ns),
         "記録にも入る"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 渡し切らせたときに切断が届いたら、その回は切断で無効にする（採点しない。Astra の監査）。
+#[test]
+fn live_mode_turns_a_late_disconnect_into_invalid() {
+    let dir = tmp("live-held-disconnect");
+    let t = timing(600, 0);
+    let e = expansion(TIE);
+    let mut msgs = FileInput::new(&as_written_midi(&e, false), &e, &t)
+        .unwrap()
+        .messages()
+        .to_vec();
+    msgs.push(etudition_engine::input::InputMsg::Disconnected);
+    let input = HeldLastInput {
+        msgs,
+        producer: None,
+    };
+    let open = open_session(setup_for(TIE, t, &dir.join("run")), Box::new(input), None).unwrap();
+    let outcome = open.run(RunMode::Live, &|_| {}, &AtomicBool::new(false));
+    assert_eq!(
+        outcome,
+        SessionOutcome::Invalid(InvalidReason::Disconnected)
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
