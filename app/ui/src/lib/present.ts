@@ -3,8 +3,8 @@ import type { MarkView } from "./bindings/MarkView";
 import type { TempoView } from "./bindings/TempoView";
 import type { UiTime } from "./bindings/UiTime";
 
-/** 演奏中の仮の印の種類。 */
-export type MarkKind = "ok" | "early" | "late" | "wrong" | "missed";
+/** 印の種類。`length`（音の長さの誤り）は演奏後の判定にだけ出る。 */
+export type MarkKind = "ok" | "early" | "late" | "wrong" | "missed" | "length";
 
 /** 判定から印の種類を決める。音程が違えば、タイミングによらず「違う音」。 */
 export function markKind(m: Pick<MarkView, "pitch" | "timing">): MarkKind {
@@ -16,7 +16,13 @@ export function markKind(m: Pick<MarkView, "pitch" | "timing">): MarkKind {
 }
 
 /** 印の形。 */
-export type MarkShape = "circle" | "tri-left" | "tri-right" | "cross" | "dash";
+export type MarkShape =
+  | "circle"
+  | "tri-left"
+  | "tri-right"
+  | "cross"
+  | "dash"
+  | "underline";
 
 /** 印の見た目（色だけに頼らず、形と文字も変える。REQ-090、I05）。 */
 export type MarkStyle = { shape: MarkShape; color: string; label: string };
@@ -27,6 +33,7 @@ const STYLES: Record<MarkKind, MarkStyle> = {
   late: { shape: "tri-right", color: "#8250df", label: "遅" },
   wrong: { shape: "cross", color: "#cf222e", label: "×" },
   missed: { shape: "dash", color: "#57606a", label: "抜" },
+  length: { shape: "underline", color: "#bc4c00", label: "長さ" },
 };
 
 /** 印の種類の見た目。 */

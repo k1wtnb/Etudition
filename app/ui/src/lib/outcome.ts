@@ -1,5 +1,6 @@
 // 回の終わり方ごとに画面に出すもの（仕様書 10-1 の表）。純関数（DOM と OSMD に触らない）。
 import type { LiveEvent } from "./bindings/LiveEvent";
+import type { NoteView } from "./bindings/NoteView";
 import type { RecordView } from "./bindings/RecordView";
 import { formatScore, type MarkKind, markKind } from "./present";
 
@@ -18,11 +19,22 @@ export type Outcome =
       kind: "stopped";
       /** 止まった位置の組の先頭の ref_index。 */
       stoppedAt: number | null;
-      /** 止まった位置までの間違えた音（W03）。 */
-      mistakes: { refIndex: number; kind: MarkKind }[];
+      /** 止まった位置までの間違えた音（W03）。`detail` は印に添える文字。 */
+      mistakes: { refIndex: number; kind: MarkKind; detail: string }[];
+      /** 余分に弾いた音の数（対応する符頭がないので、楽譜の上には出さない）。 */
+      extras: number;
       recordError: string | null;
     }
   | { kind: "invalid"; reason: string; recordError: string | null };
+
+/** 演奏後の判定の印：音程、タイミング、音の長さの順に、最初に見つかった誤り。 */
+export function finalMark(n: NoteView): { kind: MarkKind; detail: string } {
+  const kind = markKind(n);
+  if (kind !== "ok") return { kind, detail: "" };
+  if (n.duration === "short") return { kind: "length", detail: "（短い）" };
+  if (n.duration === "long") return { kind: "length", detail: "（長い）" };
+  return { kind: "ok", detail: "" };
+}
 
 function recordError(r: RecordView): string | null {
   return r.status === "failed" ? r.message : null;
@@ -45,8 +57,9 @@ export function outcomeOf(ev: LiveEvent): Outcome | null {
       kind: "stopped",
       stoppedAt: r.stopped_at,
       mistakes: r.notes
-        .map((n) => ({ refIndex: n.ref_index, kind: markKind(n) }))
+        .map((n) => ({ refIndex: n.ref_index, ...finalMark(n) }))
         .filter((m) => m.kind !== "ok"),
+      extras: r.extras.length,
       recordError: recordError(ev.record),
     };
   }

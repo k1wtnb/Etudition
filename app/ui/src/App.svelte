@@ -93,12 +93,14 @@ function finish(ev: LiveEvent) {
   if (outcome?.kind === "stopped" && sheet) {
     // 止まった回は、止まった位置までの間違えた場所を楽譜の上に出す（W03）
     sheet.clearMarks();
-    for (const m of outcome.mistakes) sheet.mark(m.refIndex, markStyle(m.kind));
+    for (const m of outcome.mistakes)
+      sheet.mark(m.refIndex, markStyle(m.kind), m.detail);
     if (outcome.stoppedAt !== null) {
       sheet.mark(
         outcome.stoppedAt,
         { shape: "dash", color: "#0969da", label: "止" },
         "ここで止まった",
+        false,
       );
     }
   }
@@ -191,7 +193,10 @@ async function stop() {
           </tbody>
         </table>
       {:else if outcome.kind === "stopped"}
-        <p class="verdict">止まったので、点数は出しません。間違えた場所を楽譜に示しました。</p>
+        <p class="verdict">止まったので、点数は出しません。止まった位置までの間違えた場所を楽譜に示しました。</p>
+        {#if outcome.extras > 0}
+          <p>楽譜にない音を {outcome.extras} 回弾きました（楽譜の上には示していません）。</p>
+        {/if}
       {:else}
         <p class="verdict">この回は無効になりました：{outcome.reason}</p>
       {/if}

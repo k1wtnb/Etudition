@@ -28,7 +28,14 @@ describe("印の種類と形（AC-18 の AI の部分）", () => {
   });
 
   it("印の種類ごとに、形も色も文字も違う（色だけに頼らない。REQ-090）", () => {
-    const kinds: MarkKind[] = ["ok", "early", "late", "wrong", "missed"];
+    const kinds: MarkKind[] = [
+      "ok",
+      "early",
+      "late",
+      "wrong",
+      "missed",
+      "length",
+    ];
     const styles = kinds.map(markStyle);
     expect(new Set(styles.map((s) => s.shape)).size).toBe(kinds.length);
     expect(new Set(styles.map((s) => s.color)).size).toBe(kinds.length);

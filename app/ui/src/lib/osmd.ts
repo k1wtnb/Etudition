@@ -164,7 +164,7 @@ function svg<K extends keyof SVGElementTagNameMap>(
 
 /**
  * 音符の符頭に、印の形（丸・左向きの三角・右向きの三角・×・点線の枠）と文字を描く（REQ-090。色だけに頼らない）。
- * 描けなければ false（符頭が見つからない）。
+ * 描いた要素を返す。描けなければ undefined（符頭が見つからない）。
  */
 export function drawMark(
   osmd: OpenSheetMusicDisplay,
@@ -172,9 +172,9 @@ export function drawMark(
   note: Note,
   style: MarkStyle,
   label: string,
-): boolean {
+): SVGElement[] | undefined {
   const el = noteheadOf(osmd, note);
-  if (!el) return false;
+  if (!el) return undefined;
   const b = el.getBBox();
   const pad = 3;
   const cx = b.x + b.width / 2;
@@ -224,6 +224,18 @@ export function drawMark(
         }),
       );
       break;
+    case "underline":
+      shapes.push(
+        svg("line", {
+          x1: b.x - pad,
+          y1: b.y + b.height + pad + 2,
+          x2: b.x + b.width + pad,
+          y2: b.y + b.height + pad + 2,
+          ...line,
+          "stroke-width": 3,
+        }),
+      );
+      break;
     case "dash":
       shapes.push(
         svg("rect", {
@@ -245,5 +257,5 @@ export function drawMark(
   });
   text.textContent = label;
   layer.append(...shapes, text);
-  return true;
+  return [...shapes, text];
 }

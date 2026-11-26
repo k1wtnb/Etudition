@@ -85,7 +85,12 @@ describe("回の終わり方ごとの表示（仕様書 10-1）", () => {
           note(1, "wrong_pitch", "within"),
           note(2, "correct", "late"),
           note(3, "missed", "not_judged"),
+          // 音の長さだけを間違えた音も、間違えた場所に出す（Astra の監査）
+          { ...note(4, "correct", "within"), duration: "short" },
+          { ...note(5, "correct", "within"), duration: "long" },
+          { ...note(6, "correct", "within"), duration: "within" },
         ],
+        extras: [{ note: 61, on: { ns: 1 }, off: { ns: 2 } }],
       },
       record: { status: "not_written" },
     });
@@ -93,10 +98,13 @@ describe("回の終わり方ごとの表示（仕様書 10-1）", () => {
       kind: "stopped",
       stoppedAt: 3,
       mistakes: [
-        { refIndex: 1, kind: "wrong" },
-        { refIndex: 2, kind: "late" },
-        { refIndex: 3, kind: "missed" },
+        { refIndex: 1, kind: "wrong", detail: "" },
+        { refIndex: 2, kind: "late", detail: "" },
+        { refIndex: 3, kind: "missed", detail: "" },
+        { refIndex: 4, kind: "length", detail: "（短い）" },
+        { refIndex: 5, kind: "length", detail: "（長い）" },
       ],
+      extras: 1,
       recordError: null,
     });
   });

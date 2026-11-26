@@ -30,6 +30,8 @@ export class Sheet {
   private entries: CursorEntry[] = [];
   private layer: SVGGElement | null = null;
   private at = -1;
+  /** OSMD の音符ごとの、いま描いてある印（繰り返しで同じ符頭を通ったら置き換える）。 */
+  private drawn = new Map<number, SVGElement[]>();
 
   constructor(private container: HTMLElement) {
     this.osmd = new OpenSheetMusicDisplay(container, {
@@ -77,7 +79,7 @@ export class Sheet {
         step: check.stepOf[i] ?? -1,
       }))
       .sort((a, b) => a.start - b.start);
-    this.layer = resetMarkLayer(this.container);
+    this.clearMarks();
     this.at = -1;
     this.showCursorAt(Number.NEGATIVE_INFINITY);
     return {
@@ -99,21 +101,38 @@ export class Sheet {
   /** 印を消す。 */
   clearMarks(): void {
     this.layer = resetMarkLayer(this.container);
+    this.drawn.clear();
   }
 
-  /** お手本の ref_index の音に印を描く。描けなければ false。 */
-  mark(refIndex: number, style: MarkStyle, extra = ""): boolean {
+  /** お手本の ref_index の音に印を描く。`replace` なら同じ符頭の前の印は消す（繰り返しの2回目で重ねない）。描けなければ false。 */
+  mark(
+    refIndex: number,
+    style: MarkStyle,
+    extra = "",
+    replace = true,
+  ): boolean {
     const ref = this.score?.notes[refIndex];
     const w = ref?.written[0];
     const o = w === undefined ? undefined : this.byCoreId.get(w.id);
     if (!this.layer || w === undefined || o === undefined) return false;
     const pass = w.pass > 1 ? `(${w.pass}回目)` : "";
-    return drawMark(
+    if (!replace) {
+      const label = `${style.label}${pass}${extra}`;
+      return (
+        drawMark(this.osmd, this.layer, this.notes[o], style, label) !==
+        undefined
+      );
+    }
+    for (const e of this.drawn.get(o) ?? []) e.remove();
+    const drawn = drawMark(
       this.osmd,
       this.layer,
       this.notes[o],
       style,
       `${style.label}${pass}${extra}`,
     );
+    if (drawn) this.drawn.set(o, drawn);
+    else this.drawn.delete(o);
+    return drawn !== undefined;
   }
 }
