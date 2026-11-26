@@ -86,14 +86,14 @@ pub fn load(bytes: Vec<u8>) -> Result<(Loaded, String), String> {
 }
 
 /// 前カウントの拍の数（計画6章 B06）：1小節。1小節の拍が4拍より少ないときは2小節。
-/// 拍は四分音符で数え（採点の仕様 v0 の SR-05）、1小節の長さは弱起でない最初の小節の長さ（拍子）から取る。
+/// 拍は四分音符で数え（採点の仕様 v0 の SR-05）、1小節の長さは弱起でない最初の小節の拍子から取る（書かれた音の長さではない）。
 /// 複合拍子などの数え方は Q-29 で決める（それまでは、この数え方で仮に進める）。
 pub fn count_in_beats(score: &Score) -> u32 {
     let beats = score
         .measures
         .iter()
         .find(|m| !m.implicit)
-        .and_then(|m| u32::try_from(m.length.num() / m.length.den()).ok())
+        .and_then(|m| u32::try_from(m.time_length.num() / m.time_length.den()).ok())
         .filter(|&b| b > 0)
         .unwrap_or(4);
     if beats < 4 { beats * 2 } else { beats }
@@ -302,7 +302,6 @@ mod tests {
     fn ui_calls_every_command_by_its_name() {
         let ts = include_str!("../../ui/src/lib/commands.ts");
         for name in [
-            "p0_time_probe",
             "load_score",
             "start_practice",
             "stop_practice",
@@ -326,6 +325,25 @@ mod tests {
         // 1小節だけの 3/4 は2小節で6拍
         let three = r#"<?xml version="1.0"?><score-partwise><part-list/><part id="P1"><measure number="1"><attributes><divisions>1</divisions><time><beats>3</beats><beat-type>4</beat-type></time></attributes><note><pitch><step>C</step><octave>4</octave></pitch><duration>3</duration></note></measure></part></score-partwise>"#;
         assert_eq!(load(three.as_bytes().to_vec()).unwrap().0.count_in_beats, 6);
+        // 書かれた音が小節に足りなくても（3/4 に四分音符2つ）、拍子から6拍
+        let short = three.replace("<duration>3</duration>", "<duration>2</duration>");
+        assert_eq!(load(short.into_bytes()).unwrap().0.count_in_beats, 6);
+    }
+
+    /// 進んでいる回があれば、二度目の開始は断る。回が終わった印を付けたら、また始められる。
+    #[test]
+    fn second_start_is_refused_while_running() {
+        let (app, _w) = app();
+        let state = app.state::<AppState>();
+        let first = begin(&state).expect("始められるはず");
+        assert_eq!(
+            begin(&state).err().as_deref(),
+            Some("練習の回がすでに進んでいる")
+        );
+        stop_practice(app.state()).unwrap();
+        assert!(first.load(Ordering::Relaxed), "止める要求が前の回に届く");
+        end(app.handle());
+        assert!(begin(&state).is_ok());
     }
 
     #[test]
@@ -336,7 +354,6 @@ mod tests {
     }
 
     /// 1a-6 の結合（AI の部分）：開発用のビルドの入口から流し込みを始め、本物の Channel で音ごとの判定と結果が届く。
-    /// 進んでいる回があれば、二度目の開始は断る。
     #[cfg(feature = "dev-feed")]
     #[test]
     fn feed_reaches_the_channel() {
@@ -372,20 +389,11 @@ mod tests {
             app.state(),
         )
         .unwrap();
-        let second = Channel::<LiveEvent>::new(|_| Ok(()));
-        let busy = feed_midi_file(
-            mid.display().to_string(),
-            tempo,
-            second,
-            app.handle().clone(),
-            app.state(),
-        );
         let deadline = Instant::now() + Duration::from_secs(10);
         while !got.lock().unwrap().iter().any(|v| v["type"] == "ended") {
             assert!(Instant::now() < deadline, "終わりの通知が届くはず");
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert_eq!(busy.err().as_deref(), Some("練習の回がすでに進んでいる"));
         let got = got.lock().unwrap().clone();
         assert_eq!(got[0]["type"], "started");
         assert_eq!(got[0]["origin"]["ns"], 4_000_000_000_i64);

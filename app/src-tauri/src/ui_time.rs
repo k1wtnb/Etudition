@@ -32,12 +32,6 @@ impl UiTime {
     }
 }
 
-/// P0 の④の確かめ：代表値（範囲の上限）を画面に返す。画面が number として同じ値を受け取るかを見る。
-#[tauri::command]
-pub fn p0_time_probe() -> Result<UiTime, String> {
-    UiTime::new(MAX_UI_NS)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,7 +59,7 @@ mod tests {
 
     #[test]
     fn json_has_exact_integer() {
-        let json = serde_json::to_string(&p0_time_probe().unwrap()).unwrap();
+        let json = serde_json::to_string(&UiTime::new(MAX_UI_NS).unwrap()).unwrap();
         assert_eq!(json, r#"{"ns":9007199254740991}"#);
     }
 }

@@ -9,7 +9,6 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
     let builder = builder.manage(practice::AppState::default());
     #[cfg(feature = "dev-feed")]
     let builder = builder.invoke_handler(tauri::generate_handler![
-        ui_time::p0_time_probe,
         practice::load_score,
         practice::start_practice,
         practice::stop_practice,
@@ -17,7 +16,6 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
     ]);
     #[cfg(not(feature = "dev-feed"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
-        ui_time::p0_time_probe,
         practice::load_score,
         practice::start_practice,
         practice::stop_practice,

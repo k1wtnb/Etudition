@@ -8,11 +8,6 @@ import type { UiTime } from "./bindings/UiTime";
 
 export type { LiveEvent, ScoreView, TempoView, UiTime };
 
-/** P0 の④の確かめ：Rust の `p0_time_probe` を呼ぶ（1a-6 の本物のコマンドで時刻の受け渡しを確かめたら消す。BQ-03） */
-export function p0TimeProbe(): Promise<UiTime> {
-  return invoke<UiTime>("p0_time_probe");
-}
-
 /** 楽譜を読む（Rust の `load_score`）。採点に使えない楽譜は、理由の文字列で失敗する */
 export function loadScore(path: string): Promise<ScoreView> {
   return invoke<ScoreView>("load_score", { path });
