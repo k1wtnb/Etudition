@@ -53,10 +53,24 @@ try {
 
 $failed = 0
 try {
-    # 途中まで届いた行が残っていても、空の行で区切り直す（ファームは空の行に返事をしない）
-    $serial.Write("`n")
-    Start-Sleep -Milliseconds 50
-    $serial.DiscardInBuffer()
+    # 区切り直し：機器に途中まで届いた行が残っていても、NUL を足して無効にしてから改行する
+    # （ファームは NUL を含む行を実行せず err を返す。何も残っていなければ NUL だけの行になり、同じく err）。
+    # その後 ping を送り、pong が来るまでの返事（err や古い ok）を読み捨てる
+    $serial.Write("`0`n")
+    $serial.Write("ping`n")
+    $synced = $false
+    $syncClock = [System.Diagnostics.Stopwatch]::StartNew()
+    while (-not $synced -and $syncClock.ElapsedMilliseconds -lt 1000) {
+        try {
+            if ($serial.ReadLine().TrimEnd("`r") -eq "pong") { $synced = $true }
+        } catch [System.TimeoutException] {
+            break
+        }
+    }
+    if (-not $synced) {
+        [Console]::Error.WriteLine("区切り直しの ping に pong が来ない（ポート、配線、ファームを確かめる）")
+        exit 1
+    }
 
     $clock = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($item in $plan) {

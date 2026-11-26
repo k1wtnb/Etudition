@@ -244,7 +244,12 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *phUart)
         return;
     }
     bHasRoom = (s_u32RxHead - s_u32RxTail) < DUMMY_APP_RX_SIZE;
-    if (s_bRxDropping)
+    if (phUart->ErrorCode != HAL_UART_ERROR_NONE)
+    {
+        /* 誤りと同時に受けた文字（HAL は誤りの通知より先にここを呼ぶ）。使わず、次の改行まで捨てる */
+        s_bRxDropping = true;
+    }
+    else if (s_bRxDropping)
     {
         /* 失った後は、次の改行までを捨て、その改行の代わりに印を入れて行を区切り直す */
         if ((s_u8RxByte == (uint8_t)'\n') && bHasRoom)
@@ -255,7 +260,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *phUart)
     }
     else if (bHasRoom)
     {
-        PushRx(s_u8RxByte);
+        /* 線上の 0x15 は内部の印と区別するため NUL に替える（main は NUL を含む行を err にする） */
+        PushRx((s_u8RxByte == DUMMY_APP_RX_LOST) ? 0U : s_u8RxByte);
     }
     else
     {

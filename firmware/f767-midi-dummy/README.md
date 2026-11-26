@@ -15,10 +15,10 @@
 | `ping` | つながっているかを確かめる | `pong` |
 | `on <note> <vel>` | Note On（note は 0〜127、vel は 1〜127） | `ok`（USB MIDI の送る列に入れた）／`busy`（PC に MIDI 機器として認識されていない、または列が満杯） |
 | `off <note>` | Note Off | `ok`／`busy` |
-| 形や値が違う行、33 文字以上の行、NUL を含む行、途中の文字を失った行 | — | `err`（実行しない） |
+| 形や値が違う行、33 文字以上の行、NUL か 0x15 を含む行、途中の文字を失った行（受信の誤りを含む） | — | `err`（実行しない） |
 | 空の行 | 区切り直し | 返事なし |
 
-PC からは `send.ps1` で送ります。
+PC からは `send.ps1` で送ります。`send.ps1` は始めに、NUL と改行で機器に残った行を無効にし、`ping` に `pong` が返るまで待ってから指示を送ります。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File firmware\f767-midi-dummy\send.ps1 COM5 ping
@@ -32,7 +32,7 @@ powershell -ExecutionPolicy Bypass -File firmware\f767-midi-dummy\send.ps1 COM5 
 |---|---|
 | LD2（青） | 動いている印。0.5 秒ごとに点滅する |
 | LD1（緑） | 送った音のうち、押されているものがある間つく |
-| LD3（赤） | `err` を返したときに 0.2 秒つく |
+| LD3（赤） | `err` を返したときに 0.2 秒つく（`send.ps1` は始めに区切り直しで `err` を1回受けるので、毎回1度つく） |
 
 ## 作り
 
