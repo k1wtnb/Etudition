@@ -597,6 +597,149 @@ fn sr12_tie_is_broken_deterministically() {
     assert_eq!(a.extras[0].on_ns, 750 * MS);
 }
 
+// ---- 1a-9：回の終わり（SR-20、SR-21）と止まった回（SR-22） ----
+
+use etudition_core::scoring::decide_end;
+
+/// T7：r3 は 6.0 秒、r4（最後）は 6.5 秒で、間が半拍。
+fn t7() -> Vec<SoundingNote> {
+    vec![
+        n(60, 0, 1),
+        n(62, 1, 1),
+        r(64, (2, 1), (1, 2), false),
+        r(65, (5, 2), (1, 2), false),
+    ]
+}
+
+/// 入力の全部で決めた回の終わり（流し込みと同じ）と、時刻 `now` までで決めた終わり。
+fn end_of(refs: &[SoundingNote], perf: &[P], now: i64) -> Option<RunEnd> {
+    let ev = events(perf, false);
+    decide_end(
+        &RunInput {
+            reference: refs,
+            timing: timing(60),
+            events: &ev,
+            rules: &RULES_V0,
+        },
+        now,
+    )
+}
+
+fn end(kind: EndKind, at_ns: i64) -> Option<RunEnd> {
+    Some(RunEnd { kind, at_ns })
+}
+
+#[test]
+fn ends_normal_cap_and_late_last_note() {
+    let t = timing(60);
+    // ST-01：最後の音を離した 16 秒
+    let perf = as_written(&t1(), &t);
+    assert_eq!(end_of(&t1(), &perf, i64::MAX), end(EndKind::Normal, 16 * S));
+    // その時刻までの入力だけで決まる：15.9 秒ではまだ終わらない
+    assert_eq!(end_of(&t1(), &perf, 15_900 * MS), None);
+    // ST-20：r10 を離さない → 上限 19 秒
+    let mut held = perf.clone();
+    held[9].off = None;
+    assert_eq!(end_of(&t1(), &held, i64::MAX), end(EndKind::Cap, 19 * S));
+    // ST-21：16.5 秒の D4 は終わりを変えない
+    let mut after = perf.clone();
+    after.push(P {
+        note: 62,
+        on: 16 * S + S / 2,
+        off: Some(16 * S + 4 * S / 5),
+    });
+    assert_eq!(
+        end_of(&t1(), &after, i64::MAX),
+        end(EndKind::Normal, 16 * S)
+    );
+    // ST-24：最後の音を違う音高で弾いても、離した 8 秒に正常
+    let mut wrong = as_written(&t2(), &t);
+    wrong[3].note = 67;
+    assert_eq!(end_of(&t2(), &wrong, i64::MAX), end(EndKind::Normal, 8 * S));
+    // ST-25：長い休符では止まらない
+    assert_eq!(
+        end_of(&t3(), &as_written(&t3(), &t), i64::MAX),
+        end(EndKind::Normal, 13 * S)
+    );
+    // ST-33：窓の外に遅れた最後の音も最後の組の打鍵で、離した 8.75 秒に正常
+    let mut late = as_written(&t2(), &t);
+    shift(&mut late[3], 3 * S / 4);
+    assert_eq!(
+        end_of(&t2(), &late, i64::MAX),
+        end(EndKind::Normal, 8 * S + 3 * S / 4)
+    );
+    // ST-37：上限の 11 秒を過ぎて初めて最後の音を押した 11.5 秒に上限
+    let mut cap = as_written(&t2(), &t);
+    cap[3] = P {
+        note: 65,
+        on: 11 * S + S / 2,
+        off: None,
+    };
+    assert_eq!(
+        end_of(&t2(), &cap, i64::MAX),
+        end(EndKind::Cap, 11 * S + S / 2)
+    );
+}
+
+/// ST-23、AC-13：最後の組の打鍵がないまま音が来なくなると、上限ではなく止まった（12 秒）。
+#[test]
+fn st23_stops_without_the_last_note() {
+    let perf = as_written(&t2(), &timing(60));
+    let perf = &perf[..3];
+    assert_eq!(end_of(&t2(), perf, 11_900 * MS), None);
+    assert_eq!(end_of(&t2(), perf, 12 * S), end(EndKind::Stopped, 12 * S));
+    assert_eq!(end_of(&t2(), perf, i64::MAX), end(EndKind::Stopped, 12 * S));
+}
+
+/// ST-22、AC-11：止まった回は q と合否を出さず、止まった位置より前の誤りの場所を返す。
+#[test]
+fn st22_stopped_run_reports_places() {
+    let t = timing(60);
+    let mut perf = as_written(&t1(), &t);
+    perf[1].note = 63;
+    perf.truncate(4);
+    let stop = end_of(&t1(), &perf, i64::MAX);
+    assert_eq!(stop, end(EndKind::Stopped, 13 * S));
+    let a = run(&t1(), t, &perf, stop.unwrap());
+    assert_eq!((a.items, a.passed), (None, None));
+    assert_eq!(a.stopped_at, Some(4));
+    let pitches: Vec<PitchResult> = a.notes.iter().map(|x| x.pitch).collect();
+    assert_eq!(
+        pitches,
+        [
+            PitchResult::Correct,
+            PitchResult::WrongPitch,
+            PitchResult::Correct,
+            PitchResult::Correct
+        ]
+    );
+    assert!(a.extras.is_empty());
+}
+
+/// ST-36：r3 の打鍵（6.0 秒）は r3 と r4 の両方の窓に入るが、近い r3 に割り当てる。止まった 11.5 秒。r3 は誤りに出ない。
+#[test]
+fn st36_stop_position_keeps_the_previous_note() {
+    let t = timing(60);
+    let perf = as_written(&t7(), &t);
+    let perf = &perf[..3];
+    let stop = end_of(&t7(), perf, i64::MAX);
+    assert_eq!(stop, end(EndKind::Stopped, 11 * S + S / 2));
+    let a = run(&t7(), t, perf, stop.unwrap());
+    assert_eq!(a.stopped_at, Some(3));
+    assert_eq!(a.notes.len(), 3);
+    assert!(a.notes.iter().all(|x| x.pitch == PitchResult::Correct));
+    assert!(a.extras.is_empty());
+}
+
+/// 何も弾かなければ、最初の組の時刻 ＋ 5 秒で止まる。
+#[test]
+fn nothing_played_stops() {
+    assert_eq!(
+        end_of(&t2(), &[], i64::MAX),
+        end(EndKind::Stopped, 4 * S + 5 * S)
+    );
+}
+
 /// SR-10：和音の組の中で同じ音高の打鍵は、時刻の順ではなく受け取った順に並べる（Astra の監査）。
 /// C4 の1音に対し、4.020 秒、3.980 秒の順に受け取った2打鍵。どちらも 20 ms ずれで同じ組。
 /// 受け取った順に並べ、SR-12 で戻るときに後ろ（2つ目に受け取った 3.980 秒）と組になる。
@@ -636,4 +779,17 @@ fn sr10_same_pitch_in_a_chord_keeps_received_order() {
     assert_eq!(a.notes[0].played.map(|p| p.on_ns), Some(3980 * MS));
     assert_eq!(a.extras.len(), 1);
     assert_eq!(a.extras[0].on_ns, 4020 * MS);
+}
+
+/// 止まったの時刻ちょうどのイベントは先に受ける（AI の決め方）。T2 で r4 を弾かず、止まったの時刻 12 秒ちょうどに
+/// 初めて F4 を押すと、止まらずに、上限（11 秒）を過ぎた最後の組の打鍵として、その時刻で上限の終わりになる。
+#[test]
+fn event_exactly_at_the_stop_deadline_is_taken_first() {
+    let mut perf = as_written(&t2(), &timing(60));
+    perf[3] = P {
+        note: 65,
+        on: 12 * S,
+        off: None,
+    };
+    assert_eq!(end_of(&t2(), &perf, i64::MAX), end(EndKind::Cap, 12 * S));
 }
