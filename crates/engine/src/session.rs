@@ -50,6 +50,9 @@ pub enum RunMode {
     Live,
     /// `Finished` まで受けてから決める（流し込み）。時計は読まない。
     Feed,
+    /// `Feed` と同じ採点と記録で、通知を時刻どおりに送る（開発用の画面の流し込み。1a-7）。
+    /// 受けたノートオンと印は `EngineClock` がその時刻になってから送り、終わりの時刻まで待ってから採点する。
+    FeedPaced,
 }
 
 /// その回を無効にする理由。
@@ -205,14 +208,35 @@ impl OpenSession {
             timing: self.setup.timing,
         });
         let outcome = match mode {
-            RunMode::Feed => self.run_feed(notify, stop),
+            RunMode::Feed => self.run_feed(false, notify, stop),
+            RunMode::FeedPaced => self.run_feed(true, notify, stop),
             RunMode::Live => self.run_live(notify, stop),
         };
         self.input.close();
         outcome
     }
 
-    fn run_feed(&mut self, notify: &dyn Fn(EngineEvent), stop: &AtomicBool) -> SessionOutcome {
+    /// `EngineClock` が `at_ns` になるまで待つ。途中で終了の要求が来たら `false`。
+    fn wait_until(&self, at_ns: i64, stop: &AtomicBool) -> bool {
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                return false;
+            }
+            let left = at_ns.saturating_sub(self.clock.ns_of(Instant::now()));
+            if left <= 0 {
+                return true;
+            }
+            let left = Duration::from_nanos(u64::try_from(left).unwrap_or(u64::MAX));
+            std::thread::sleep(left.min(ENGINE_TICK));
+        }
+    }
+
+    fn run_feed(
+        &mut self,
+        paced: bool,
+        notify: &dyn Fn(EngineEvent),
+        stop: &AtomicBool,
+    ) -> SessionOutcome {
         let mut raw = Vec::new();
         loop {
             if stop.load(Ordering::Relaxed) {
@@ -265,8 +289,14 @@ impl OpenSession {
             prev = c;
         }
         timeline.sort_by_key(|(t, order, _)| (*t, *order));
-        for (_, _, ev) in timeline {
+        for (t, _, ev) in timeline {
+            if paced && !self.wait_until(t, stop) {
+                return SessionOutcome::Cancelled;
+            }
             notify(ev);
+        }
+        if paced && !self.wait_until(end.at_ns, stop) {
+            return SessionOutcome::Cancelled;
         }
         // 記録の前に、終了の要求をもう一度見る（途中で閉じた回は記録しない。AC-42 の (3)）
         if stop.load(Ordering::Relaxed) {

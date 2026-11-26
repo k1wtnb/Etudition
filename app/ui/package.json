@@ -11,7 +11,6 @@
     "lint": "biome check .",
     "test": "vitest run",
     "licenses": "node scripts/check-licenses.mjs",
-    "s1-data": "node scripts/s1-data.mjs",
     "tauri": "cd ../src-tauri && tauri"
   },
   "dependencies": {

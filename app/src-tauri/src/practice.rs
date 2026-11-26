@@ -60,8 +60,8 @@ impl AppState {
     }
 }
 
-/// 楽譜を読み、採点に使えるかを確かめる（B07、REQ-105）。戻り値の2つ目は楽譜の XML の文字列。
-pub fn load(bytes: Vec<u8>) -> Result<(Loaded, String), String> {
+/// 楽譜を読み、採点に使えるかを確かめる（B07、REQ-105）。戻り値の2つ目は画面に渡す楽譜。
+pub fn load(bytes: Vec<u8>) -> Result<(Loaded, ScoreView), String> {
     let loaded = read_score(&bytes).map_err(|e| format!("読めない楽譜: {e}"))?;
     let expansion = expand(&loaded.score);
     check_playable(&expansion).map_err(|issues| {
@@ -75,13 +75,14 @@ pub fn load(bytes: Vec<u8>) -> Result<(Loaded, String), String> {
         format!("採点に使えない楽譜：{}", list.join("、"))
     })?;
     let count_in_beats = count_in_beats(&loaded.score);
+    let view = ScoreView::new(loaded.xml, &loaded.score.notes, &expansion.sounding)?;
     Ok((
         Loaded {
             bytes,
             expansion,
             count_in_beats,
         },
-        loaded.xml,
+        view,
     ))
 }
 
@@ -171,8 +172,7 @@ pub fn end<R: Runtime>(app: &AppHandle<R>) {
 #[tauri::command]
 pub fn load_score(path: String, state: tauri::State<'_, AppState>) -> Result<ScoreView, String> {
     let bytes = std::fs::read(&path).map_err(|e| format!("{path} を開けない: {e}"))?;
-    let (loaded, xml) = load(bytes)?;
-    let view = ScoreView::new(xml, &loaded.expansion.sounding);
+    let (loaded, view) = load(bytes)?;
     *lock(&state.loaded)? = Some(Arc::new(loaded));
     Ok(view)
 }
@@ -218,7 +218,7 @@ pub fn feed_midi_file<R: Runtime>(
         }
     };
     std::thread::spawn(move || {
-        run(open, RunMode::Feed, &stop, &|ev| {
+        run(open, RunMode::FeedPaced, &stop, &|ev| {
             let _ = events.send(ev);
         });
         end(&app);
@@ -354,6 +354,7 @@ mod tests {
     }
 
     /// 1a-6 の結合（AI の部分）：開発用のビルドの入口から流し込みを始め、本物の Channel で音ごとの判定と結果が届く。
+    /// 1a-7：通知は時刻どおりに届く（終わりの通知は、終わりの時刻より前には来ない）。速く終わるよう、テンポは 600。
     #[cfg(feature = "dev-feed")]
     #[test]
     fn feed_reaches_the_channel() {
@@ -380,7 +381,8 @@ mod tests {
             }
             Ok(())
         });
-        let tempo = TempoView { num: 60, den: 1 };
+        let tempo = TempoView { num: 600, den: 1 };
+        let began = Instant::now();
         feed_midi_file(
             mid.display().to_string(),
             tempo,
@@ -394,16 +396,20 @@ mod tests {
             assert!(Instant::now() < deadline, "終わりの通知が届くはず");
             std::thread::sleep(Duration::from_millis(10));
         }
+        assert!(
+            began.elapsed() >= Duration::from_millis(1600),
+            "時刻どおりに届くはず"
+        );
         let got = got.lock().unwrap().clone();
         assert_eq!(got[0]["type"], "started");
-        assert_eq!(got[0]["origin"]["ns"], 4_000_000_000_i64);
+        assert_eq!(got[0]["origin"]["ns"], 400_000_000_i64);
         assert!(got.iter().any(|v| v["type"] == "marks"));
         let ended = got.iter().find(|v| v["type"] == "ended").unwrap();
         assert_eq!(ended["result"]["passed"], true);
-        assert_eq!(ended["result"]["end_at"]["ns"], 16_000_000_000_i64);
+        assert_eq!(ended["result"]["end_at"]["ns"], 1_600_000_000_i64);
         assert_eq!(
             ended["result"]["notes"][0]["played"]["on"]["ns"],
-            4_000_000_000_i64
+            400_000_000_i64
         );
         assert_eq!(ended["record"]["status"], "written");
         // 回が終わったら、印が外れて次の回を始められる

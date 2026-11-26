@@ -4,6 +4,8 @@
 
 use etudition_core::expand::SoundingNote;
 use etudition_core::perf::PlayedNote;
+use etudition_core::quarters::Quarters;
+use etudition_core::score::WrittenNote;
 use etudition_core::scoring::{
     DurationResult, EndKind, ItemScore, NoteMark, PitchResult, RunResult, TimingResult,
 };
@@ -34,12 +36,51 @@ pub struct WrittenView {
     pub pass: u32,
 }
 
+/// 四分音符の数（`num / den`。画面では表示とカーソルにだけ使う）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "../../ui/src/lib/bindings/")]
+pub struct QuartersView {
+    /// 分子（弱起は負）。
+    pub num: i32,
+    /// 分母。
+    pub den: u32,
+}
+
+fn quarters(q: Quarters) -> Result<QuartersView, String> {
+    Ok(QuartersView {
+        num: i32::try_from(q.num()).map_err(|_| format!("画面に渡せない位置: {q:?}"))?,
+        den: u32::try_from(q.den()).map_err(|_| format!("画面に渡せない位置: {q:?}"))?,
+    })
+}
+
+/// 楽譜に書かれた1つの音符。画面は、OSMD の音符と、小節・譜表・声部・小節の中の位置・音高・装飾音かで突き合わせる（S1 の1段目）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "../../ui/src/lib/bindings/")]
+pub struct WrittenNoteView {
+    /// 書かれた音符の ID（`P1/m0/v1/n0`）。
+    pub id: String,
+    /// 小節の文書の中の順番（0 始まり）。
+    pub measure_index: u32,
+    /// `voice` 要素の文字列。
+    pub voice: String,
+    /// 譜表の番号（1 始まり）。
+    pub staff: u32,
+    /// 音高（MIDI のノート番号）。
+    pub pitch: i32,
+    /// 小節の頭からの位置。
+    pub offset_quarters: QuartersView,
+    /// 装飾音か。
+    pub is_grace: bool,
+}
+
 /// お手本の1音。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "../../ui/src/lib/bindings/")]
 pub struct RefNoteView {
     /// お手本の何番目か。
     pub ref_index: u32,
+    /// 始まりの位置（1小節目の頭が 0。カーソルを進める時機に使う）。
+    pub start_quarters: QuartersView,
     /// 音高（MIDI のノート番号）。
     pub pitch: i32,
     /// 装飾音か。
@@ -54,31 +95,58 @@ pub struct RefNoteView {
 pub struct ScoreView {
     /// 楽譜の XML の文字列（OSMD に渡す）。
     pub xml: String,
+    /// 書かれた音符（文書の順）。
+    pub written: Vec<WrittenNoteView>,
     /// お手本の音（並びは採点の仕様 v0 の SR-01）。
     pub notes: Vec<RefNoteView>,
 }
 
 impl ScoreView {
-    /// お手本から作る。
-    pub fn new(xml: String, sounding: &[SoundingNote]) -> ScoreView {
+    /// 書かれた音符とお手本から作る。位置が i32 と u32 に収まらない楽譜は誤りにする。
+    pub fn new(
+        xml: String,
+        written: &[WrittenNote],
+        sounding: &[SoundingNote],
+    ) -> Result<ScoreView, String> {
+        let written = written
+            .iter()
+            .map(|w| {
+                Ok(WrittenNoteView {
+                    id: w.id.to_string(),
+                    measure_index: count(w.id.measure_index),
+                    voice: w.id.voice.clone(),
+                    staff: w.staff,
+                    pitch: w.pitch,
+                    offset_quarters: quarters(w.offset)?,
+                    is_grace: w.is_grace,
+                })
+            })
+            .collect::<Result<_, String>>()?;
         let notes = sounding
             .iter()
             .enumerate()
-            .map(|(i, s)| RefNoteView {
-                ref_index: count(i),
-                pitch: s.pitch,
-                is_grace: s.is_grace,
-                written: s
-                    .written
-                    .iter()
-                    .map(|w| WrittenView {
-                        id: w.id.to_string(),
-                        pass: w.pass,
-                    })
-                    .collect(),
+            .map(|(i, s)| {
+                Ok(RefNoteView {
+                    ref_index: count(i),
+                    start_quarters: quarters(s.start)?,
+                    pitch: s.pitch,
+                    is_grace: s.is_grace,
+                    written: s
+                        .written
+                        .iter()
+                        .map(|w| WrittenView {
+                            id: w.id.to_string(),
+                            pass: w.pass,
+                        })
+                        .collect(),
+                })
             })
-            .collect();
-        ScoreView { xml, notes }
+            .collect::<Result<_, String>>()?;
+        Ok(ScoreView {
+            xml,
+            written,
+            notes,
+        })
     }
 }
 
@@ -404,6 +472,24 @@ mod tests {
         );
         let decl = LiveEvent::decl(&ts_rs::Config::default());
         assert!(decl.contains("\"type\": \"note_received\""), "{decl}");
+    }
+
+    /// 画面は、書かれた音符の中身で OSMD の音符を探し、お手本の音の位置でカーソルを進める（1a-7）。
+    #[test]
+    fn score_view_has_written_notes_and_positions() {
+        let loaded = etudition_core::score::read_score(include_bytes!(
+            "../../../fixtures/s1/07-pickup.musicxml"
+        ))
+        .unwrap();
+        let e = etudition_core::expand::expand(&loaded.score);
+        let v = ScoreView::new(String::new(), &loaded.score.notes, &e.sounding).unwrap();
+        assert_eq!(v.written.len(), loaded.score.notes.len());
+        assert_eq!(v.written[0].id, "P1/m0/v1/n0");
+        assert_eq!(v.notes.len(), e.sounding.len());
+        // 弱起の音は 0 より前
+        assert!(v.notes[0].start_quarters.num < 0);
+        let json = serde_json::to_value(&v.written[0]).unwrap();
+        assert!(json["offset_quarters"]["den"].is_number());
     }
 
     #[test]

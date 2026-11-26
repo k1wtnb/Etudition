@@ -3,4 +3,3 @@ node_modules/
 dist/
 /app/src-tauri/gen/
 .pnpm-store/
-/app/ui/s1-data/

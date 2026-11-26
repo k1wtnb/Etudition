@@ -451,6 +451,52 @@ fn live_mode_reaches_the_same_result() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 1a-7：時刻どおりの流し込みは、即時の流し込みと同じ通知を同じ順に送り、同じ結果になる。
+/// 終わりの時刻まで待ってから採点する。途中で終了を要求したら、記録しない。
+#[test]
+fn paced_feed_sends_the_same_events_in_time() {
+    let dir = tmp("paced");
+    let t = timing(600, 0);
+    let e = expansion(TIE);
+    let midi = as_written_midi(&e, false);
+    let quick = feed(TIE, &midi, t, &dir.join("quick"), FEED);
+    let began = std::time::Instant::now();
+    let paced = feed(
+        TIE,
+        &midi,
+        t,
+        &dir.join("paced"),
+        Opts {
+            mode: RunMode::FeedPaced,
+            ..FEED
+        },
+    );
+    let res = scored(&paced);
+    assert!(began.elapsed().as_nanos() >= u128::try_from(res.end.at_ns).unwrap());
+    assert_eq!(res, scored(&quick));
+    // 最後の `Ended` は記録先のパスが違うので、それより前の通知を比べる
+    let n = quick.events.len();
+    assert_eq!(paced.events.len(), n);
+    assert_eq!(paced.events[..n - 1], quick.events[..n - 1]);
+    assert!(matches!(paced.events[n - 1], EngineEvent::Ended { .. }));
+    assert!(dir.join("paced").join("result.json").exists());
+
+    let stopped = feed(
+        TIE,
+        &midi,
+        t,
+        &dir.join("stopped"),
+        Opts {
+            mode: RunMode::FeedPaced,
+            stop_on_first_note: true,
+            ..FEED
+        },
+    );
+    assert!(matches!(stopped.outcome, SessionOutcome::Cancelled));
+    assert!(!dir.join("stopped").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// 終了を要求した後に接続が切れても、記録しない（閉じた回。REQ-102。Astra の監査）。
 /// 時計で進む回で、最初のノートオンの通知で終了を要求し、同じ受け取りで切断を受ける。
 #[test]
