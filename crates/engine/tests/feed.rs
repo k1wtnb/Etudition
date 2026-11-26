@@ -554,10 +554,12 @@ fn stop_then_disconnect_writes_nothing() {
     assert!(!dir.exists());
 }
 
-/// 最後のメッセージを、`flush`（受けた分を渡し切る要求）で初めて渡す試験用の入力（中継が遅れて渡す分を作る。Astra の監査）。
+/// 最後のメッセージを、`request_flush`（受けた分を渡し切る要求）で初めて渡す試験用の入力（中継が遅れて渡す分を作る。Astra の監査）。
+/// 渡し終えたと答えるのは、2回目に聞かれたとき（練習のスレッドが待つ間も列を読むことを通す）。
 struct HeldLastInput {
     msgs: Vec<etudition_engine::input::InputMsg>,
     producer: Option<etudition_engine::rtrb::Producer<etudition_engine::input::InputMsg>>,
+    asked: std::sync::atomic::AtomicU32,
 }
 
 impl etudition_engine::input::MidiInput for HeldLastInput {
@@ -573,12 +575,18 @@ impl etudition_engine::input::MidiInput for HeldLastInput {
         self.producer = Some(sink.producer);
         Ok(())
     }
-    fn flush(&mut self) {
+    fn request_flush(&mut self) -> u64 {
         if let Some(p) = self.producer.as_mut() {
             for m in self.msgs.drain(..) {
                 p.push(m).unwrap();
             }
         }
+        1
+    }
+    fn flushed(&self, _ticket: u64) -> bool {
+        self.asked
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            >= 1
     }
     fn close(&mut self) {}
 }
@@ -600,6 +608,7 @@ fn live_mode_takes_what_arrives_when_input_flushes() {
     let input = HeldLastInput {
         msgs,
         producer: None,
+        asked: std::sync::atomic::AtomicU32::new(0),
     };
     let open = open_session(setup_for(TIE, t, &dir.join("run")), Box::new(input), None).unwrap();
     let outcome = open.run(RunMode::Live, &|_| {}, &AtomicBool::new(false));
@@ -633,6 +642,7 @@ fn live_mode_turns_a_late_disconnect_into_invalid() {
     let input = HeldLastInput {
         msgs,
         producer: None,
+        asked: std::sync::atomic::AtomicU32::new(0),
     };
     let open = open_session(setup_for(TIE, t, &dir.join("run")), Box::new(input), None).unwrap();
     let outcome = open.run(RunMode::Live, &|_| {}, &AtomicBool::new(false));

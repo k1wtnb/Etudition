@@ -69,9 +69,15 @@ impl fmt::Display for StartError {
 pub trait MidiInput: Send {
     /// 入力を開き、`clock` で時刻を付けて `sink` に送り始める。
     fn open(&mut self, clock: EngineClock, sink: InputSink) -> Result<(), StartError>;
-    /// 閉じずに、呼んだときまでに受けた分（切断の知らせを含む）を送り先へ渡し切ってから戻る。
-    /// 中継を持たない入力は何もしない。
-    fn flush(&mut self) {}
+    /// 閉じずに、呼んだときまでに受けた分（切断の知らせを含む）を送り先へ渡し切るよう頼む（待たない）。
+    /// 返した番号を `flushed` に渡す。中継を持たない入力は何もしない。
+    fn request_flush(&mut self) -> u64 {
+        0
+    }
+    /// `request_flush` で頼んだ分を送り先へ渡し終えたか。送り先が満杯なら、読まれるまで終わらない。
+    fn flushed(&self, _ticket: u64) -> bool {
+        true
+    }
     /// 入力を閉じる。
     fn close(&mut self);
 }
@@ -425,15 +431,14 @@ impl MidiInput for MidirInput {
         Ok(())
     }
 
-    fn flush(&mut self) {
-        let Some(w) = self.worker.as_ref() else {
-            return;
-        };
-        let n = self.flush.0.fetch_add(1, Ordering::SeqCst) + 1;
+    fn request_flush(&mut self) -> u64 {
+        self.flush.0.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    fn flushed(&self, ticket: u64) -> bool {
         // 中継が終わっていれば（切断を知らせた後など）、渡せるものはもう渡してある
-        while self.flush.1.load(Ordering::Acquire) < n && !w.is_finished() {
-            std::thread::sleep(MIDIR_RELAY_TICK);
-        }
+        self.flush.1.load(Ordering::Acquire) >= ticket
+            || self.worker.as_ref().is_none_or(JoinHandle::is_finished)
     }
 
     fn close(&mut self) {

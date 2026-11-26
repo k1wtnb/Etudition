@@ -393,22 +393,8 @@ impl OpenSession {
             if stop.load(Ordering::Relaxed) {
                 return SessionOutcome::Cancelled;
             }
-            while let Ok(m) = self.consumer.pop() {
-                match m {
-                    InputMsg::Midi(r) => {
-                        if r.bytes[0] & 0xf0 == 0x90 && r.bytes[2] != 0 {
-                            notify(EngineEvent::NoteReceived {
-                                note: r.bytes[1] & 0x7f,
-                                at_ns: r.at_ns - self.setup.correction_ns,
-                            });
-                        }
-                        raw.push(r);
-                    }
-                    InputMsg::Disconnected => {
-                        return self.invalid(InvalidReason::Disconnected, &raw, notify, stop);
-                    }
-                    InputMsg::Finished => {}
-                }
+            if self.take_input(&mut raw, notify) {
+                return self.invalid(InvalidReason::Disconnected, &raw, notify, stop);
             }
             if self.drain_audio(|s, count_in| {
                 notify(EngineEvent::Click {
@@ -438,15 +424,20 @@ impl OpenSession {
                 // 終わりを決める前に、`now` までに受けた分を中継に渡し切らせて取り込む（閉じない。Astra の監査）。
                 // 取り込んだ音で終わりが成り立たなくなれば、入力を開いたまま続ける。
                 // `now` より後の音は、採点と記録の終わりの時刻で外れる
-                self.input.flush();
-                while let Ok(m) = self.consumer.pop() {
-                    match m {
-                        InputMsg::Midi(r) => raw.push(r),
-                        InputMsg::Disconnected => {
-                            return self.invalid(InvalidReason::Disconnected, &raw, notify, stop);
-                        }
-                        InputMsg::Finished => {}
+                // 待つ間も列を読む（送り先が満杯でも中継が渡し切れるように）。終了の要求も見る
+                let ticket = self.input.request_flush();
+                loop {
+                    let done = self.input.flushed(ticket);
+                    if self.take_input(&mut raw, notify) {
+                        return self.invalid(InvalidReason::Disconnected, &raw, notify, stop);
                     }
+                    if done {
+                        break;
+                    }
+                    if stop.load(Ordering::Relaxed) {
+                        return SessionOutcome::Cancelled;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
                 }
                 let perf = to_perf(&raw, self.setup.correction_ns);
                 let Some(end) = decide_end(&self.input(&perf), now) else {
@@ -464,6 +455,26 @@ impl OpenSession {
             }
             std::thread::sleep(ENGINE_TICK);
         }
+    }
+
+    /// 列にある入力を読む。ノートオンは受けたことを知らせる。切断の知らせがあれば `true`。
+    fn take_input(&mut self, raw: &mut Vec<RawMidi>, notify: &dyn Fn(EngineEvent)) -> bool {
+        while let Ok(m) = self.consumer.pop() {
+            match m {
+                InputMsg::Midi(r) => {
+                    if r.bytes[0] & 0xf0 == 0x90 && r.bytes[2] != 0 {
+                        notify(EngineEvent::NoteReceived {
+                            note: r.bytes[1] & 0x7f,
+                            at_ns: r.at_ns - self.setup.correction_ns,
+                        });
+                    }
+                    raw.push(r);
+                }
+                InputMsg::Disconnected => return true,
+                InputMsg::Finished => {}
+            }
+        }
+        false
     }
 
     /// `result.json` の中身を作る（回の終わりより後に受けた入力は入れない）。
