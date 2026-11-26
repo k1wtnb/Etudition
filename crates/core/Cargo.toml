@@ -12,3 +12,5 @@ workspace = true
 [dependencies]
 roxmltree = "=0.21.2"
 zip = { version = "=9.8.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# 採点の結果を result.json に書くため（境界の約束 B0 の BQ-01。人間が了承、2026-11-25）
+serde = { version = "=1.0.229", features = ["derive"] }

@@ -5,6 +5,8 @@
 
 use std::collections::BTreeMap;
 
+use serde::Serialize;
+
 use crate::expand::SoundingNote;
 use crate::perf::{PerfEvent, PerfKind, PlayedNote, build_notes};
 use crate::rules::Rules;
@@ -24,7 +26,7 @@ pub struct RunInput<'a> {
 }
 
 /// 回の終わり方。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum EndKind {
     /// 正常に終わった（最後の音を離した）。
     Normal,
@@ -35,7 +37,7 @@ pub enum EndKind {
 }
 
 /// 回の終わり。`at_ns` は規則が決める終わりの時刻。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct RunEnd {
     /// 終わり方。
     pub kind: EndKind,
@@ -44,7 +46,7 @@ pub struct RunEnd {
 }
 
 /// 音程の判定。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum PitchResult {
     /// 正しい音高で組になった。
     Correct,
@@ -55,7 +57,7 @@ pub enum PitchResult {
 }
 
 /// タイミングの判定。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum TimingResult {
     /// 許容幅の中。
     Within,
@@ -68,7 +70,7 @@ pub enum TimingResult {
 }
 
 /// 音の長さの判定。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum DurationResult {
     /// 許容幅の中。
     Within,
@@ -81,7 +83,7 @@ pub enum DurationResult {
 }
 
 /// お手本の1音の判定。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NoteJudgement {
     /// `reference` の何番目か。
     pub ref_index: usize,
@@ -100,7 +102,7 @@ pub struct NoteJudgement {
 }
 
 /// 1つの項目の点数。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ItemScore {
     /// 誤りの数。
     pub errors: u32,
@@ -111,7 +113,7 @@ pub struct ItemScore {
 }
 
 /// 3項目の点数。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Items {
     /// 音程。
     pub pitch: ItemScore,
@@ -122,7 +124,7 @@ pub struct Items {
 }
 
 /// 採点の結果。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RunResult {
     /// 採点規則の版。
     pub rules_version: &'static str,
@@ -141,7 +143,7 @@ pub struct RunResult {
 }
 
 /// 演奏中の仮の印（SQ-04）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct NoteMark {
     /// `reference` の何番目か。
     pub ref_index: usize,

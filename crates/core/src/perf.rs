@@ -23,7 +23,7 @@ pub struct PerfEvent {
 }
 
 /// 演奏の1音。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct PlayedNote {
     /// ノート番号。
     pub note: u8,

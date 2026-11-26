@@ -12,3 +12,10 @@ workspace = true
 [dependencies]
 etudition-core = { path = "../core" }
 serde_json = "=1.0.154"
+midly = { version = "=0.5.3", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+# 回帰試験で流し込みと記録を通す
+etudition-engine = { path = "../engine" }
+# 点数の控え（人間が承認、2026-11-26）。控えの更新は、差分を人間が見てから（計画 1a-3）
+insta = { version = "=1.49.0", default-features = false }

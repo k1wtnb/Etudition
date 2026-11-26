@@ -1,0 +1,22 @@
+---
+source: crates/cli/tests/regression.rs
+assertion_line: 166
+expression: out
+---
+as-written Normal@16000000000 q=(1000000,1000000,1000000) passed=true extras=0 | Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within
+wrong-pitch Normal@16000000000 q=(900000,1000000,1000000) passed=true extras=0 | Correct=Within WrongPitch=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within
+octave Normal@16000000000 q=(900000,1000000,1000000) passed=true extras=0 | WrongPitch=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within
+missing Normal@16000000000 q=(900000,1000000,1000000) passed=true extras=0 | Correct=Within Missed-NotJudged Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within
+extra Normal@16000000000 q=(900000,1000000,1000000) passed=true extras=1 | Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within
+late Normal@16000000000 q=(1000000,900000,1000000) passed=true extras=0 | Correct=Within Correct>Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within
+late-at-tolerance Normal@16000000000 q=(1000000,1000000,1000000) passed=true extras=0 | Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within
+outside-window Normal@16000000000 q=(800000,1000000,1000000) passed=false extras=1 | Correct=Within Missed-NotJudged Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within
+too-short Normal@16000000000 q=(1000000,1000000,900000) passed=true extras=0 | Correct=Within Correct=Short Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within
+length-at-half Normal@16000000000 q=(1000000,1000000,1000000) passed=true extras=0 | Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within
+length-at-one-and-half Normal@16000000000 q=(1000000,1000000,1000000) passed=true extras=0 | Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within
+too-long Normal@16000000000 q=(1000000,1000000,900000) passed=true extras=0 | Correct=Within Correct=Long Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within
+missing-chord-note Normal@16000000000 q=(900000,1000000,1000000) passed=true extras=0 | Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Missed-NotJudged Correct=Within Correct=Within Correct=Within Correct=Within
+missing-repeated-note Normal@16000000000 q=(900000,1000000,1000000) passed=true extras=0 | Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Missed-NotJudged Correct=Within
+all-late Normal@16250000000 q=(1000000,0,1000000) passed=true extras=0 | Correct>Within Correct>Within Correct>Within Correct>Within Correct>Within Correct>Within Correct>Within Correct>Within Correct>Within Correct>Within
+wrong-pitch-and-late Normal@16000000000 q=(900000,900000,1000000) passed=true extras=0 | Correct=Within WrongPitch>Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within
+no-note-off Cap@19000000000 q=(1000000,1000000,900000) passed=true extras=0 | Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Within Correct=Long
