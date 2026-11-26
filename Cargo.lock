@@ -823,12 +823,21 @@ name = "etudition-core"
 version = "0.1.0"
 dependencies = [
  "roxmltree",
+ "serde",
  "zip",
 ]
 
 [[package]]
 name = "etudition-engine"
 version = "0.1.0"
+dependencies = [
+ "etudition-core",
+ "midly",
+ "rtrb",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+]
 
 [[package]]
 name = "fastrand"
@@ -1940,6 +1949,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "midly"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "207d755f4cb882d20c4da58d707ca9130a0c9bc5061f657a4f299b8e36362b7a"
+
+[[package]]
 name = "mime"
 version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2732,6 +2747,12 @@ checksum = "9da7f59328b09405b181fee1018925fad50f157afb43c0c0f5c522c256dd5907"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "rtrb"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5974e397833d890f2f74963408e0d4a6cd8eda2f6a445ae06750291b5d7a997e"
 
 [[package]]
 name = "rustc-hash"
