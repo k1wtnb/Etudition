@@ -401,7 +401,7 @@ impl OpenSession {
         SessionOutcome::Scored(result)
     }
 
-    /// 無効の回：採点せず、`result.json` に理由を書く（10-1）。`performance.mid` は未確定（Q-51）なので書かない。
+    /// 無効の回：採点せず、`result.json` に理由を書き、`performance.mid` も書く（10-1、Q-51。人間の回答 2026-11-26）。
     fn invalid(
         &self,
         reason: InvalidReason,
@@ -414,7 +414,8 @@ impl OpenSession {
             return SessionOutcome::Cancelled;
         }
         let rec = self.record(raw, i64::MAX, None, Some(reason));
-        let record = status(write_run(&self.setup.record_dir, Some(&rec), None));
+        let perf = to_perf(raw, self.setup.correction_ns);
+        let record = status(write_run(&self.setup.record_dir, Some(&rec), Some(&perf)));
         notify(EngineEvent::Invalid { reason, record });
         SessionOutcome::Invalid(reason)
     }

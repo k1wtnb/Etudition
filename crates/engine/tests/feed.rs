@@ -314,7 +314,7 @@ fn correction_is_recorded_and_applied() {
 }
 
 /// REQ-103（1a-9 の engine の部分）：接続が切れた回は無効にし、採点せず、result.json に理由を書く。
-/// performance.mid は未確定（Q-51）なので書かない。
+/// performance.mid も書く（Q-51。人間の回答 2026-11-26「無効の回でも performance.mid を書く」）。
 #[test]
 fn disconnect_makes_the_run_invalid() {
     let dir = tmp("disconnect");
@@ -341,7 +341,8 @@ fn disconnect_makes_the_run_invalid() {
     else {
         panic!("無効の回を記録したはず: {:?}", r.events.last());
     };
-    assert!(files.midi.is_none());
+    let midi = std::fs::read(files.midi.as_ref().expect("performance.mid を書いたはず")).unwrap();
+    assert!(midi.starts_with(b"MThd"));
     let json: serde_json::Value =
         serde_json::from_slice(&std::fs::read(files.json.as_ref().unwrap()).unwrap()).unwrap();
     assert_eq!(json["invalid_reason"], "MIDI の接続が切れた");
