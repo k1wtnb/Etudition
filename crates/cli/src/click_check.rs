@@ -83,6 +83,12 @@ pub fn summarize(stamps: &[ClickStamp]) -> Summary {
     }
 }
 
+/// 測った回を使えるか。出力先を失った、予定のクリックが欠けた、コールバックの記録が欠けた、
+/// または停止までに受け取り切れなかったなら、使えない（測り直す）。
+pub fn usable(lost: bool, count: usize, planned: usize, complete: bool) -> bool {
+    !lost && count >= planned && complete
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,5 +152,14 @@ mod tests {
         assert_eq!(v["index"], 4);
         assert_eq!(v["cpal_playback_ns"], 107);
         assert_eq!(v["at_ns"], 2_500);
+    }
+
+    /// 測った回を使えるのは、喪失がなく、予定のクリックが全部あり、記録が欠けず、停止までに全部受け取れたときだけ（Astra の監査 2回目）。
+    #[test]
+    fn measurement_is_usable_only_when_nothing_is_missing() {
+        assert!(usable(false, 5, 5, true));
+        assert!(!usable(true, 5, 5, true));
+        assert!(!usable(false, 4, 5, true));
+        assert!(!usable(false, 5, 5, false));
     }
 }
