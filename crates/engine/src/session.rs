@@ -12,7 +12,7 @@ use etudition_core::expand::Expansion;
 use etudition_core::perf::{PerfEvent, PerfKind};
 use etudition_core::rules::Rules;
 use etudition_core::scoring::{
-    EndKind, NoteMark, RunEnd, RunInput, RunResult, decide_end, marks_closed_between, score_run,
+    NoteMark, RunEnd, RunInput, RunResult, decide_end, marks_closed_between, score_run,
 };
 use etudition_core::timing::{Timing, position_to_ns, span_to_ns};
 
@@ -390,16 +390,10 @@ impl OpenSession {
     fn finish(&self, end: RunEnd, raw: &[RawMidi], notify: &dyn Fn(EngineEvent)) -> SessionOutcome {
         let perf = to_perf(raw, self.setup.correction_ns);
         let result = score_run(&self.input(&perf), end);
-        let record = match end.kind {
-            EndKind::Normal | EndKind::Cap => {
-                let kept: Vec<PerfEvent> =
-                    perf.into_iter().filter(|e| e.t_ns <= end.at_ns).collect();
-                let rec = self.record(raw, end.at_ns, Some((&result).into()), None);
-                status(write_run(&self.setup.record_dir, Some(&rec), Some(&kept)))
-            }
-            // 止まった回の performance.mid と result.json は未確定（Q-51）なので書かない
-            EndKind::Stopped => RecordStatus::NotWritten,
-        };
+        // 止まった回も2つの記録を書く（Q-51。人間の回答 2026-11-26）。止まった回の結果は点数と合否を持たない
+        let kept: Vec<PerfEvent> = perf.into_iter().filter(|e| e.t_ns <= end.at_ns).collect();
+        let rec = self.record(raw, end.at_ns, Some((&result).into()), None);
+        let record = status(write_run(&self.setup.record_dir, Some(&rec), Some(&kept)));
         notify(EngineEvent::Ended {
             result: result.clone(),
             record,

@@ -349,22 +349,30 @@ fn disconnect_makes_the_run_invalid() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 止まった回の記録は未確定（Q-51）なので書かない。
+/// Q-51（人間の回答 2026-11-26「止まった回でも二つの記録はとる」）：止まった回も `result.json` と `performance.mid` を書く。
+/// `result.json` の結果は終わり方が「止まった」で、点数と合否はない。
 #[test]
-fn stopped_run_is_not_recorded() {
+fn stopped_run_writes_both_records() {
     let dir = tmp("stopped");
     let t = timing(60, 4 * S);
     let e = expansion(TIE);
     let r = feed(TIE, &as_written_midi(&e, true), t, &dir.join("run"), FEED);
     assert_eq!(scored(&r).end.kind, EndKind::Stopped);
-    assert!(matches!(
-        r.events.last(),
-        Some(EngineEvent::Ended {
-            record: RecordStatus::NotWritten,
-            ..
-        })
-    ));
-    assert!(!dir.join("run").exists());
+    let Some(EngineEvent::Ended {
+        record: RecordStatus::Written(files),
+        ..
+    }) = r.events.last()
+    else {
+        panic!("止まった回を記録したはず: {:?}", r.events.last());
+    };
+    assert!(files.midi.as_ref().is_some_and(|p| p.exists()));
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(files.json.as_ref().unwrap()).unwrap()).unwrap();
+    assert_eq!(json["result"]["end"]["kind"], "Stopped", "{json}");
+    assert!(json["result"]["items"].is_null());
+    assert!(json["result"]["passed"].is_null());
+    assert!(json["invalid_reason"].is_null());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// AC-42 の (1)：書き込めない記録先なら、採点の結果は返り、「記録できなかった」になり、書きかけが残らない。
