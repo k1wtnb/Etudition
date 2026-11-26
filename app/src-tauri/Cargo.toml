@@ -21,6 +21,8 @@ etudition-engine = { path = "../../crates/engine" }
 dev-feed = []
 
 [dev-dependencies]
+# 本物のコマンドの登録と Channel を通す試験（tauri の feature `test`。依存は増えない）
+tauri = { version = "=2.12.7", features = ["test"] }
 serde_json = "=1.0.154"
 midly = { version = "=0.5.3", default-features = false, features = ["std"] }
 

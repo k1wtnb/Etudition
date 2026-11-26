@@ -2,6 +2,7 @@
 import type { EndView } from "./EndView";
 import type { ItemsView } from "./ItemsView";
 import type { NoteView } from "./NoteView";
+import type { PlayedView } from "./PlayedView";
 import type { UiTime } from "./UiTime";
 
 /**
@@ -16,9 +17,9 @@ export type RunResultView = {
    */
   notes: Array<NoteView>;
   /**
-   * 余分な音の数。
+   * 余分な音。
    */
-  extras: number;
+  extras: Array<PlayedView>;
   /**
    * 止まった回は `null`。
    */

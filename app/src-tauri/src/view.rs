@@ -3,6 +3,7 @@
 //! 型は `cargo test -p etudition-app` のときに `app/ui/src/lib/bindings/` へ書き出される（ts-rs）。
 
 use etudition_core::expand::SoundingNote;
+use etudition_core::perf::PlayedNote;
 use etudition_core::scoring::{
     DurationResult, EndKind, ItemScore, NoteMark, PitchResult, RunResult, TimingResult,
 };
@@ -132,6 +133,23 @@ pub struct MarkView {
     pub timing: TimingView,
 }
 
+/// 演奏の1音（打鍵の時刻）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "../../ui/src/lib/bindings/")]
+pub struct PlayedView {
+    pub note: u8,
+    pub on: UiTime,
+    pub off: UiTime,
+}
+
+fn played(p: &PlayedNote) -> Result<PlayedView, String> {
+    Ok(PlayedView {
+        note: p.note,
+        on: UiTime::new(p.on_ns)?,
+        off: UiTime::new(p.off_ns)?,
+    })
+}
+
 /// お手本の1音の、演奏後の判定。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "../../ui/src/lib/bindings/")]
@@ -139,6 +157,8 @@ pub struct NoteView {
     pub ref_index: u32,
     pub is_grace: bool,
     pub pitch: PitchView,
+    /// 組になった演奏の音。
+    pub played: Option<PlayedView>,
     pub timing: TimingView,
     /// 演奏のノートオンの時刻 − お手本の時刻。
     pub delta: Option<UiTime>,
@@ -172,8 +192,8 @@ pub struct RunResultView {
     pub end_at: UiTime,
     /// お手本の音ごとの判定（止まった回は、止まった位置より前の音だけ）。
     pub notes: Vec<NoteView>,
-    /// 余分な音の数。
-    pub extras: u32,
+    /// 余分な音。
+    pub extras: Vec<PlayedView>,
     /// 止まった回は `null`。
     pub items: Option<ItemsView>,
     /// 止まった回は `null`。
@@ -294,6 +314,7 @@ impl RunResultView {
                     ref_index: count(n.ref_index),
                     is_grace: n.is_grace,
                     pitch: pitch(n.pitch),
+                    played: n.played.as_ref().map(played).transpose()?,
                     timing: timing(n.timing),
                     delta: n.delta_ns.map(UiTime::new).transpose()?,
                     duration: duration(n.duration),
@@ -309,7 +330,11 @@ impl RunResultView {
             },
             end_at: UiTime::new(r.end.at_ns)?,
             notes,
-            extras: count(r.extras.len()),
+            extras: r
+                .extras
+                .iter()
+                .map(played)
+                .collect::<Result<Vec<_>, String>>()?,
             items: r.items.map(|i| ItemsView {
                 pitch: item(i.pitch),
                 timing: item(i.timing),
