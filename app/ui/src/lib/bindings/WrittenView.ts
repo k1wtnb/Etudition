@@ -3,12 +3,13 @@
 /**
  * お手本の1音が含む、書かれた音符と何回目か。
  */
-export type WrittenView = { 
-/**
- * 書かれた音符の ID（`P1/m0/v1/n0`）。
- */
-id: string, 
-/**
- * 何回目か（1 始まり）。
- */
-pass: number, };
+export type WrittenView = {
+  /**
+   * 書かれた音符の ID（`P1/m0/v1/n0`）。
+   */
+  id: string;
+  /**
+   * 何回目か（1 始まり）。
+   */
+  pass: number;
+};
