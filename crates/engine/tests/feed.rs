@@ -450,3 +450,26 @@ fn live_mode_reaches_the_same_result() {
     assert!(r.events.iter().any(|e| matches!(e, EngineEvent::Marks(_))));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// 終了を要求した後に接続が切れても、記録しない（閉じた回。REQ-102。Astra の監査）。
+/// 時計で進む回で、最初のノートオンの通知で終了を要求し、同じ受け取りで切断を受ける。
+#[test]
+fn stop_then_disconnect_writes_nothing() {
+    let dir = tmp("stop-then-disconnect");
+    let t = timing(600, 0);
+    let e = expansion(TIE);
+    let r = feed(
+        TIE,
+        &as_written_midi(&e, false),
+        t,
+        &dir.join("run"),
+        Opts {
+            disconnect_at: Some(S / 2),
+            mode: RunMode::Live,
+            stop_on_first_note: true,
+            ..FEED
+        },
+    );
+    assert_eq!(r.outcome, SessionOutcome::Cancelled);
+    assert!(!dir.exists());
+}

@@ -222,7 +222,7 @@ impl OpenSession {
                 Ok(InputMsg::Midi(r)) => raw.push(r),
                 Ok(InputMsg::Finished) => break,
                 Ok(InputMsg::Disconnected) => {
-                    return self.invalid(InvalidReason::Disconnected, &raw, notify);
+                    return self.invalid(InvalidReason::Disconnected, &raw, notify, stop);
                 }
                 Err(_) => std::thread::sleep(Duration::from_millis(1)),
             }
@@ -294,7 +294,7 @@ impl OpenSession {
                         raw.push(r);
                     }
                     InputMsg::Disconnected => {
-                        return self.invalid(InvalidReason::Disconnected, &raw, notify);
+                        return self.invalid(InvalidReason::Disconnected, &raw, notify, stop);
                     }
                     InputMsg::Finished => {}
                 }
@@ -383,7 +383,12 @@ impl OpenSession {
         reason: InvalidReason,
         raw: &[RawMidi],
         notify: &dyn Fn(EngineEvent),
+        stop: &AtomicBool,
     ) -> SessionOutcome {
+        // 記録の前に、すでに届いた終了の要求を見る（閉じた回は記録しない。REQ-102）
+        if stop.load(Ordering::Relaxed) {
+            return SessionOutcome::Cancelled;
+        }
         let rec = self.record(raw, i64::MAX, None, Some(reason));
         let record = status(write_run(&self.setup.record_dir, Some(&rec), None));
         notify(EngineEvent::Invalid { reason, record });

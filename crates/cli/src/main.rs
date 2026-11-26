@@ -52,8 +52,8 @@ fn main() -> ExitCode {
 fn make_errors(path: &str, out: &std::path::Path) -> ExitCode {
     // Windows で取り出した写しは改行が CRLF のことがあるので、LF にそろえて比べる
     let normalized = |b: &[u8]| String::from_utf8_lossy(b).replace('\r', "");
-    match std::fs::read(path) {
-        Ok(b) if normalized(&b) == normalized(etudition_cli::errors::T1) => {}
+    let bytes = match std::fs::read(path) {
+        Ok(b) if normalized(&b) == normalized(etudition_cli::errors::T1) => b,
         Ok(_) => {
             eprintln!("make-errors は合成の楽譜 T1（fixtures/1a/t1.musicxml）だけを受け付ける");
             return ExitCode::FAILURE;
@@ -62,11 +62,9 @@ fn make_errors(path: &str, out: &std::path::Path) -> ExitCode {
             eprintln!("{path} を開けない: {e}");
             return ExitCode::FAILURE;
         }
-    }
-    let loaded = match std::fs::read(path)
-        .map_err(|e| ReadError(format!("{path} を開けない: {e}")))
-        .and_then(|b| read_score(&b))
-    {
+    };
+    // 照らしたバイト列をそのまま読む（読み直さない）
+    let loaded = match read_score(&bytes) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("読めない: {e}");
