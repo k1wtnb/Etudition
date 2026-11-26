@@ -3,3 +3,4 @@
 pub mod click_check;
 pub mod errors;
 pub mod midi_log;
+pub mod midi_send;
