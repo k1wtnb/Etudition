@@ -14,4 +14,4 @@ export type LiveEvent =
   | { type: "note_received"; note: number; at: UiTime }
   | { type: "marks"; marks: Array<MarkView> }
   | { type: "ended"; result: RunResultView; record: RecordView }
-  | { type: "invalid"; reason: string; record: RecordView };
+  | { type: "invalid"; reason: string; advice: string; record: RecordView };

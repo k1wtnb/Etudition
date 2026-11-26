@@ -90,19 +90,20 @@ function finish(ev: LiveEvent) {
   clock = null;
   running = false;
   outcome = outcomeOf(ev);
-  if (outcome?.kind === "stopped" && sheet) {
-    // 止まった回は、止まった位置までの間違えた場所を楽譜の上に出す（W03）
-    sheet.clearMarks();
-    for (const m of outcome.mistakes)
-      sheet.mark(m.refIndex, markStyle(m.kind), m.detail);
-    if (outcome.stoppedAt !== null) {
-      sheet.mark(
-        outcome.stoppedAt,
-        { shape: "dash", color: "#0969da", label: "止" },
-        "ここで止まった",
-        false,
-      );
-    }
+  if (!outcome || !sheet) return;
+  // 演奏中の仮の印は消す。止まった回（W03）と正常に終わった回（Q-34 の B）は、演奏後の判定で間違えた音を描き直す。
+  // 無効の回（Q-52 の C）は採点しないので、印を残さない。
+  sheet.clearMarks();
+  if (outcome.kind === "invalid") return;
+  for (const m of outcome.mistakes)
+    sheet.mark(m.refIndex, markStyle(m.kind), m.detail);
+  if (outcome.kind === "stopped" && outcome.stoppedAt !== null) {
+    sheet.mark(
+      outcome.stoppedAt,
+      { shape: "dash", color: "#0969da", label: "止" },
+      "ここで止まった",
+      false,
+    );
   }
 }
 
@@ -198,7 +199,8 @@ async function stop() {
           <p>楽譜にない音を {outcome.extras} 回弾きました（楽譜の上には示していません）。</p>
         {/if}
       {:else}
-        <p class="verdict">この回は無効になりました：{outcome.reason}</p>
+        <p class="verdict">この回は無効になりました（点数は出しません）：{outcome.reason}</p>
+        <p>{outcome.advice}</p>
       {/if}
       {#if outcome.recordError !== null}
         <p class="message" role="alert">記録できなかった：{outcome.recordError}</p>
