@@ -3,4 +3,4 @@
 /**
  * 1つの項目の点数（q は 100 点 ＝ 1,000,000。表示の形は画面で作る。SR-17）。
  */
-export type ItemView = { errors: number; denominator: number; q: number };
+export type ItemView = { errors: number, denominator: number, q: number, };

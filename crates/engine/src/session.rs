@@ -243,6 +243,12 @@ impl OpenSession {
         outcome
     }
 
+    /// あふれの数が1以上なら、その数で無効にする理由（REQ-104。B0 の4章の手順5）。
+    fn overflowed(&self) -> Option<InvalidReason> {
+        let count = self.overflow.load(Ordering::Relaxed);
+        (count > 0).then_some(InvalidReason::Overflow { count })
+    }
+
     /// 音声の列を空にする。組は覚え、出力先を失っていたら `true`。
     fn drain_audio(&mut self, mut on_stamp: impl FnMut(&ClickStamp, bool)) -> bool {
         let mut lost = false;
@@ -289,6 +295,10 @@ impl OpenSession {
         loop {
             if stop.load(Ordering::Relaxed) {
                 return SessionOutcome::Cancelled;
+            }
+            // あふれたら `Finished` を待たずに手順5へ（無効にする）
+            if let Some(why) = self.overflowed() {
+                return self.invalid(why, &raw, notify, stop);
             }
             match self.consumer.pop() {
                 Ok(InputMsg::Midi(r)) => raw.push(r),
@@ -370,6 +380,9 @@ impl OpenSession {
         if stop.load(Ordering::Relaxed) {
             return SessionOutcome::Cancelled;
         }
+        if let Some(why) = self.overflowed() {
+            return self.invalid(why, &raw, notify, stop);
+        }
         self.finish(end, &raw, notify)
     }
 
@@ -421,6 +434,10 @@ impl OpenSession {
             if let Some(end) = end {
                 if stop.load(Ordering::Relaxed) {
                     return SessionOutcome::Cancelled;
+                }
+                // 採点の前にあふれの数を読む（B0 の4章の手順5）
+                if let Some(why) = self.overflowed() {
+                    return self.invalid(why, &raw, notify, stop);
                 }
                 return self.finish(end, &raw, notify);
             }

@@ -216,3 +216,179 @@ impl Drop for FileInput {
         self.close();
     }
 }
+
+/// midir のコールバックで受けたバイト列を `RawMidi` にする（確保しない）。3バイトより長いもの（SysEx など）と空のものは捨てる。
+pub fn raw_midi(at_ns: i64, backend_us: u64, msg: &[u8]) -> Option<RawMidi> {
+    if msg.is_empty() || msg.len() > 3 {
+        return None;
+    }
+    let mut bytes = [0u8; 3];
+    bytes[..msg.len()].copy_from_slice(msg);
+    Some(RawMidi {
+        at_ns,
+        backend_us: Some(backend_us),
+        bytes,
+        len: u8::try_from(msg.len()).unwrap_or(3),
+    })
+}
+
+/// 入力の機器の名前の一覧から、使う機器を選ぶ。なければ `None`（`NoMidiDevice`）。今は最初のもの（S2b と S3 で見直す）。
+pub fn choose_port(names: &[String]) -> Option<usize> {
+    (!names.is_empty()).then_some(0)
+}
+
+/// コールバックから受けたメッセージの内側の列の長さ。
+const MIDIR_QUEUE: usize = 4096;
+/// 内側の列から送り先へ渡す間隔。
+const MIDIR_RELAY_TICK: Duration = Duration::from_millis(1);
+/// 機器が抜けたかを調べる間隔。
+const MIDIR_WATCH: Duration = Duration::from_millis(500);
+
+/// 実機の MIDI の入力（midir。裏側は既定のもの。Windows は WinMM。裏側の選び方は S2b で見直す）。
+///
+/// midir のコールバックは時刻を付けて内側の列に入れるだけ（待たず、確保しない。入らなければあふれに数える）。
+/// 自分のスレッドが内側の列から送り先へ渡し、機器が抜けたら `Disconnected` を送る（REQ-103）。
+pub struct MidirInput {
+    conn: Option<midir::MidiInputConnection<()>>,
+    stop: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
+    /// 開いた機器の名前。
+    pub port_name: Option<String>,
+}
+
+impl Default for MidirInput {
+    fn default() -> Self {
+        MidirInput::new()
+    }
+}
+
+impl MidirInput {
+    /// まだ開いていない入力。
+    pub fn new() -> MidirInput {
+        MidirInput {
+            conn: None,
+            stop: Arc::new(AtomicBool::new(false)),
+            worker: None,
+            port_name: None,
+        }
+    }
+}
+
+/// `id` の機器がまだあるか。
+fn port_present(id: &str) -> bool {
+    midir::MidiInput::new("Etudition-watch").is_ok_and(|m| m.find_port_by_id(id).is_some())
+}
+
+impl MidiInput for MidirInput {
+    fn open(&mut self, clock: EngineClock, sink: InputSink) -> Result<(), StartError> {
+        // MIDI の仕組みそのものが使えないときも、機器がないとみなす（REQ-103）
+        let mut input = midir::MidiInput::new("Etudition").map_err(|_| StartError::NoMidiDevice)?;
+        // SysEx、タイミングクロック、アクティブセンシングは使わない
+        input.ignore(midir::Ignore::All);
+        let ports = input.ports();
+        let names: Vec<String> = ports
+            .iter()
+            .map(|p| input.port_name(p).unwrap_or_default())
+            .collect();
+        let Some(i) = choose_port(&names) else {
+            return Err(StartError::NoMidiDevice);
+        };
+        let port = &ports[i];
+        let id = port.id();
+        let (mut tx, mut rx) = rtrb::RingBuffer::<InputMsg>::new(MIDIR_QUEUE);
+        let overflow = Arc::clone(&sink.overflow);
+        let conn = input
+            .connect(
+                port,
+                "etudition-in",
+                move |stamp_us, msg, ()| {
+                    let at_ns = clock.ns_of(std::time::Instant::now());
+                    if let Some(r) = raw_midi(at_ns, stamp_us, msg)
+                        && tx.push(InputMsg::Midi(r)).is_err()
+                    {
+                        overflow.fetch_add(1, Ordering::Relaxed);
+                    }
+                },
+                (),
+            )
+            .map_err(|e| StartError::Other(format!("MIDI 機器を開けない: {e}")))?;
+        let stop = Arc::clone(&self.stop);
+        let mut producer = sink.producer;
+        self.worker = Some(std::thread::spawn(move || {
+            let mut last_watch = std::time::Instant::now();
+            let mut pending: Option<InputMsg> = None;
+            while !stop.load(Ordering::Relaxed) {
+                while let Some(m) = pending.take().or_else(|| rx.pop().ok()) {
+                    // 送り先が満杯なら、捨てずに次の周回で入れ直す（ここはコールバックではないので待ってよい）
+                    if let Err(rtrb::PushError::Full(back)) = producer.push(m) {
+                        pending = Some(back);
+                        break;
+                    }
+                }
+                if last_watch.elapsed() >= MIDIR_WATCH {
+                    last_watch = std::time::Instant::now();
+                    if !port_present(&id) {
+                        while producer.push(InputMsg::Disconnected).is_err() {
+                            if stop.load(Ordering::Relaxed) {
+                                return;
+                            }
+                            std::thread::sleep(MIDIR_RELAY_TICK);
+                        }
+                        return;
+                    }
+                }
+                std::thread::sleep(MIDIR_RELAY_TICK);
+            }
+        }));
+        self.conn = Some(conn);
+        self.port_name = names.into_iter().nth(i);
+        Ok(())
+    }
+
+    fn close(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(w) = self.worker.take() {
+            let _ = w.join();
+        }
+        if let Some(c) = self.conn.take() {
+            let _ = c.close();
+        }
+    }
+}
+
+impl Drop for MidirInput {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+#[cfg(test)]
+mod midir_tests {
+    use super::*;
+
+    /// midir のコールバックで受けたバイト列を `RawMidi` にする。3バイトより長いもの（SysEx など）と空のものは捨てる。
+    #[test]
+    fn raw_midi_keeps_short_messages_with_both_times() {
+        let r = raw_midi(1_500, 42, &[0x90, 60, 100]).unwrap();
+        assert_eq!(
+            r,
+            RawMidi {
+                at_ns: 1_500,
+                backend_us: Some(42),
+                bytes: [0x90, 60, 100],
+                len: 3,
+            }
+        );
+        let one = raw_midi(7, 1, &[0xfe]).unwrap();
+        assert_eq!((one.bytes, one.len), ([0xfe, 0, 0], 1));
+        assert!(raw_midi(0, 0, &[]).is_none());
+        assert!(raw_midi(0, 0, &[0xf0, 1, 2, 0xf7]).is_none());
+    }
+
+    /// 入力の機器がなければ選ばない（`NoMidiDevice`。REQ-103）。あれば最初のものを使う（S2b と S3 で見直す）。
+    #[test]
+    fn choose_port_takes_the_first_or_none() {
+        assert_eq!(choose_port(&[]), None);
+        assert_eq!(choose_port(&["F767 MIDI".into(), "other".into()]), Some(0));
+    }
+}

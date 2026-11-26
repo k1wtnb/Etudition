@@ -3,13 +3,12 @@
 /**
  * 練習のテンポ（四分音符／分 ＝ `num / den`）。
  */
-export type TempoView = {
-  /**
-   * 分子。
-   */
-  num: number;
-  /**
-   * 分母。
-   */
-  den: number;
-};
+export type TempoView = { 
+/**
+ * 分子。
+ */
+num: number, 
+/**
+ * 分母。
+ */
+den: number, };

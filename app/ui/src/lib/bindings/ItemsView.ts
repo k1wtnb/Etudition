@@ -4,8 +4,4 @@ import type { ItemView } from "./ItemView";
 /**
  * 3項目の点数。
  */
-export type ItemsView = {
-  pitch: ItemView;
-  timing: ItemView;
-  duration: ItemView;
-};
+export type ItemsView = { pitch: ItemView, timing: ItemView, duration: ItemView, };

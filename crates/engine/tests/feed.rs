@@ -690,3 +690,61 @@ fn lost_audio_output_makes_the_run_invalid() {
     assert!(json["result"].is_null());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// 受けたメッセージを送ったあと、捨てた数を足して終わる試験用の入力（REQ-104 のあふれを起こす）。
+struct OverflowInput {
+    inner: FileInput,
+    dropped: u32,
+}
+
+impl etudition_engine::input::MidiInput for OverflowInput {
+    fn open(
+        &mut self,
+        clock: etudition_engine::clock::EngineClock,
+        sink: etudition_engine::input::InputSink,
+    ) -> Result<(), StartError> {
+        sink.overflow
+            .fetch_add(self.dropped, std::sync::atomic::Ordering::Relaxed);
+        self.inner.open(clock, sink)
+    }
+    fn close(&mut self) {
+        self.inner.close();
+    }
+}
+
+/// AC-44：受け渡しのあふれがあると、その回は無効になり、点数と合否を出さず、`result.json` にあふれの数と理由が書かれる。
+#[test]
+fn overflow_makes_the_run_invalid() {
+    let dir = tmp("overflow");
+    let t = timing(60, 4 * S);
+    let e = expansion(TIE);
+    let input = OverflowInput {
+        inner: FileInput::new(&as_written_midi(&e, false), &e, &t).unwrap(),
+        dropped: 3,
+    };
+    let open = open_session(setup_for(TIE, t, &dir.join("run")), Box::new(input), None).unwrap();
+    let seen = Mutex::new(Vec::new());
+    let outcome = open.run(
+        RunMode::Feed,
+        &|ev| seen.lock().unwrap().push(ev),
+        &AtomicBool::new(false),
+    );
+    assert_eq!(
+        outcome,
+        SessionOutcome::Invalid(InvalidReason::Overflow { count: 3 })
+    );
+    let events = seen.into_inner().unwrap();
+    let Some(EngineEvent::Invalid {
+        record: RecordStatus::Written(files),
+        ..
+    }) = events.last()
+    else {
+        panic!("無効の回を記録したはず: {:?}", events.last());
+    };
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(files.json.as_ref().unwrap()).unwrap()).unwrap();
+    assert_eq!(json["invalid_reason"], "受信のあふれ（3 件）");
+    assert_eq!(json["overflow_count"], 3);
+    assert!(json["result"].is_null());
+    let _ = std::fs::remove_dir_all(&dir);
+}

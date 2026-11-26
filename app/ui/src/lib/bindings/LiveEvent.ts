@@ -8,10 +8,4 @@ import type { UiTime } from "./UiTime";
 /**
  * 画面への通知（境界の約束 B0 の5章。`EngineEvent` の時刻を `UiTime` にしたもの）。
  */
-export type LiveEvent =
-  | { type: "started"; origin: UiTime; tempo: TempoView }
-  | { type: "click"; index: number; count_in: boolean; at: UiTime }
-  | { type: "note_received"; note: number; at: UiTime }
-  | { type: "marks"; marks: Array<MarkView> }
-  | { type: "ended"; result: RunResultView; record: RecordView }
-  | { type: "invalid"; reason: string; advice: string; record: RecordView };
+export type LiveEvent = { "type": "started", origin: UiTime, tempo: TempoView, } | { "type": "click", index: number, count_in: boolean, at: UiTime, } | { "type": "note_received", note: number, at: UiTime, } | { "type": "marks", marks: Array<MarkView>, } | { "type": "ended", result: RunResultView, record: RecordView, } | { "type": "invalid", reason: string, advice: string, record: RecordView, };
