@@ -3,7 +3,4 @@
 /**
  * 記録の状態。
  */
-export type RecordView =
-  | { status: "written" }
-  | { status: "failed"; message: string }
-  | { status: "not_written" };
+export type RecordView = { "status": "written" } | { "status": "failed", message: string, } | { "status": "not_written" };

@@ -5,25 +5,24 @@ import type { WrittenView } from "./WrittenView";
 /**
  * お手本の1音。
  */
-export type RefNoteView = {
-  /**
-   * お手本の何番目か。
-   */
-  ref_index: number;
-  /**
-   * 始まりの位置（1小節目の頭が 0。カーソルを進める時機に使う）。
-   */
-  start_quarters: QuartersView;
-  /**
-   * 音高（MIDI のノート番号）。
-   */
-  pitch: number;
-  /**
-   * 装飾音か。
-   */
-  is_grace: boolean;
-  /**
-   * 書かれた音符の列。画面は ID で OSMD の音符を探す（S1 の2段の対応）。
-   */
-  written: Array<WrittenView>;
-};
+export type RefNoteView = { 
+/**
+ * お手本の何番目か。
+ */
+ref_index: number, 
+/**
+ * 始まりの位置（1小節目の頭が 0。カーソルを進める時機に使う）。
+ */
+start_quarters: QuartersView, 
+/**
+ * 音高（MIDI のノート番号）。
+ */
+pitch: number, 
+/**
+ * 装飾音か。
+ */
+is_grace: boolean, 
+/**
+ * 書かれた音符の列。画面は ID で OSMD の音符を探す（S1 の2段の対応）。
+ */
+written: Array<WrittenView>, };

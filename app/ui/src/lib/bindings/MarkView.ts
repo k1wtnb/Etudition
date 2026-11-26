@@ -5,8 +5,4 @@ import type { TimingView } from "./TimingView";
 /**
  * 演奏中の仮の印。
  */
-export type MarkView = {
-  ref_index: number;
-  pitch: PitchView;
-  timing: TimingView;
-};
+export type MarkView = { ref_index: number, pitch: PitchView, timing: TimingView, };

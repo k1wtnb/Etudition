@@ -5,17 +5,16 @@ import type { WrittenNoteView } from "./WrittenNoteView";
 /**
  * 読み込んだ楽譜。
  */
-export type ScoreView = {
-  /**
-   * 楽譜の XML の文字列（OSMD に渡す）。
-   */
-  xml: string;
-  /**
-   * 書かれた音符（文書の順）。
-   */
-  written: Array<WrittenNoteView>;
-  /**
-   * お手本の音（並びは採点の仕様 v0 の SR-01）。
-   */
-  notes: Array<RefNoteView>;
-};
+export type ScoreView = { 
+/**
+ * 楽譜の XML の文字列（OSMD に渡す）。
+ */
+xml: string, 
+/**
+ * 書かれた音符（文書の順）。
+ */
+written: Array<WrittenNoteView>, 
+/**
+ * お手本の音（並びは採点の仕様 v0 の SR-01）。
+ */
+notes: Array<RefNoteView>, };

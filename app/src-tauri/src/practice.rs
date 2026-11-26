@@ -86,18 +86,17 @@ pub fn load(bytes: Vec<u8>) -> Result<(Loaded, ScoreView), String> {
     ))
 }
 
-/// 前カウントの拍の数（計画6章 B06）：1小節。1小節の拍が4拍より少ないときは2小節。
+/// 前カウントの拍の数：どの拍子でも1小節（Q-29。人間の回答 2026-11-26）。
 /// 拍は四分音符で数え（採点の仕様 v0 の SR-05）、1小節の長さは弱起でない最初の小節の拍子から取る（書かれた音の長さではない）。
-/// 複合拍子などの数え方は Q-29 で決める（それまでは、この数え方で仮に進める）。
+/// 分母が 4 でない拍子（6/8、2/2 など）のクリックの単位は、まだ決まっていない（それまでは四分音符で仮に数える）。
 pub fn count_in_beats(score: &Score) -> u32 {
-    let beats = score
+    score
         .measures
         .iter()
         .find(|m| !m.implicit)
         .and_then(|m| u32::try_from(m.time_length.num() / m.time_length.den()).ok())
         .filter(|&b| b > 0)
-        .unwrap_or(4);
-    if beats < 4 { beats * 2 } else { beats }
+        .unwrap_or(4)
 }
 
 /// 練習のテンポと前カウントから、楽譜の位置 0 の時刻を決める（原点は前カウントの最初のクリック）。
@@ -315,19 +314,24 @@ mod tests {
     }
 
     #[test]
-    fn count_in_follows_b06() {
+    fn count_in_is_one_measure() {
         let (t1, _) = load(T1.to_vec()).unwrap();
         assert_eq!(t1.count_in_beats, 4);
         let t = timing_of(TempoView { num: 60, den: 1 }, &t1).unwrap();
         assert_eq!(t.origin_ns, 4_000_000_000);
         // 弱起の小節は数えない（07 は 4/4）
         assert_eq!(load(PICKUP.to_vec()).unwrap().0.count_in_beats, 4);
-        // 1小節だけの 3/4 は2小節で6拍
+        // Q-29（人間の回答 2026-11-26）：どの拍子でも1小節。3/4 は3拍
         let three = r#"<?xml version="1.0"?><score-partwise><part-list/><part id="P1"><measure number="1"><attributes><divisions>1</divisions><time><beats>3</beats><beat-type>4</beat-type></time></attributes><note><pitch><step>C</step><octave>4</octave></pitch><duration>3</duration></note></measure></part></score-partwise>"#;
-        assert_eq!(load(three.as_bytes().to_vec()).unwrap().0.count_in_beats, 6);
-        // 書かれた音が小節に足りなくても（3/4 に四分音符2つ）、拍子から6拍
+        assert_eq!(load(three.as_bytes().to_vec()).unwrap().0.count_in_beats, 3);
+        // 2/4 は2拍
+        let two = three
+            .replace("<beats>3</beats>", "<beats>2</beats>")
+            .replace("<duration>3</duration>", "<duration>2</duration>");
+        assert_eq!(load(two.into_bytes()).unwrap().0.count_in_beats, 2);
+        // 書かれた音が小節に足りなくても（3/4 に四分音符2つ）、拍子から3拍
         let short = three.replace("<duration>3</duration>", "<duration>2</duration>");
-        assert_eq!(load(short.into_bytes()).unwrap().0.count_in_beats, 6);
+        assert_eq!(load(short.into_bytes()).unwrap().0.count_in_beats, 3);
     }
 
     /// 進んでいる回があれば、二度目の開始は断る。回が終わった印を付けたら、また始められる。
