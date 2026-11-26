@@ -13,6 +13,8 @@ export type Outcome =
       /** 合否（core の判定をそのまま使う）。 */
       passed: boolean;
       cap: boolean;
+      /** 演奏後の判定で間違えた音（Q-34 の B。演奏中の仮の印は消して、これを描く）。 */
+      mistakes: Mistake[];
       recordError: string | null;
     }
   | {
@@ -20,12 +22,27 @@ export type Outcome =
       /** 止まった位置の組の先頭の ref_index。 */
       stoppedAt: number | null;
       /** 止まった位置までの間違えた音（W03）。`detail` は印に添える文字。 */
-      mistakes: { refIndex: number; kind: MarkKind; detail: string }[];
+      mistakes: Mistake[];
       /** 余分に弾いた音の数（対応する符頭がないので、楽譜の上には出さない）。 */
       extras: number;
       recordError: string | null;
     }
-  | { kind: "invalid"; reason: string; recordError: string | null };
+  | {
+      kind: "invalid";
+      reason: string;
+      /** 次にすることの案内（Q-52 の C。演奏中の仮の印は消す）。 */
+      advice: string;
+      recordError: string | null;
+    };
+
+/** 演奏後の判定で間違えた音。`detail` は印に添える文字。 */
+export type Mistake = { refIndex: number; kind: MarkKind; detail: string };
+
+function mistakesOf(notes: NoteView[]): Mistake[] {
+  return notes
+    .map((n) => ({ refIndex: n.ref_index, ...finalMark(n) }))
+    .filter((m) => m.kind !== "ok");
+}
 
 /** 演奏後の判定の印：音程、タイミング、音の長さの順に、最初に見つかった誤り。 */
 export function finalMark(n: NoteView): { kind: MarkKind; detail: string } {
@@ -43,10 +60,10 @@ function recordError(r: RecordView): string | null {
 /** 終わりの通知から、画面に出すものを作る。終わりの通知でなければ null。 */
 export function outcomeOf(ev: LiveEvent): Outcome | null {
   if (ev.type === "invalid") {
-    // Q-52（無効の回の画面）は未確定。理由の文字だけを出す（仮）
     return {
       kind: "invalid",
       reason: ev.reason,
+      advice: ev.advice,
       recordError: recordError(ev.record),
     };
   }
@@ -56,9 +73,7 @@ export function outcomeOf(ev: LiveEvent): Outcome | null {
     return {
       kind: "stopped",
       stoppedAt: r.stopped_at,
-      mistakes: r.notes
-        .map((n) => ({ refIndex: n.ref_index, ...finalMark(n) }))
-        .filter((m) => m.kind !== "ok"),
+      mistakes: mistakesOf(r.notes),
       extras: r.extras.length,
       recordError: recordError(ev.record),
     };
@@ -81,6 +96,7 @@ export function outcomeOf(ev: LiveEvent): Outcome | null {
     ],
     passed: r.passed,
     cap: r.end === "cap",
+    mistakes: mistakesOf(r.notes),
     recordError: recordError(ev.record),
   };
 }

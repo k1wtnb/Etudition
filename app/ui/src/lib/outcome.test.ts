@@ -49,7 +49,32 @@ describe("回の終わり方ごとの表示（仕様書 10-1）", () => {
       ],
       passed: false,
       cap: false,
+      mistakes: [],
       recordError: null,
+    });
+  });
+
+  it("正常に終わった回は、演奏後の判定で間違えた音を楽譜に出す（Q-34 の B。人間の判断 2026-11-26）", () => {
+    const o = outcomeOf({
+      type: "ended",
+      result: {
+        ...base,
+        notes: [
+          note(0, "correct", "within"),
+          note(1, "wrong_pitch", "within"),
+          note(2, "correct", "early"),
+          { ...note(3, "correct", "within"), duration: "long" },
+        ],
+      },
+      record: { status: "written" },
+    });
+    expect(o).toMatchObject({
+      kind: "scored",
+      mistakes: [
+        { refIndex: 1, kind: "wrong", detail: "" },
+        { refIndex: 2, kind: "early", detail: "" },
+        { refIndex: 3, kind: "length", detail: "（長い）" },
+      ],
     });
   });
 
@@ -109,15 +134,17 @@ describe("回の終わり方ごとの表示（仕様書 10-1）", () => {
     });
   });
 
-  it("無効の回は、理由だけを出す（Q-52 が決まるまでの仮）", () => {
+  it("無効の回は、理由と次にすることの案内を出す（Q-52 の C。人間の判断 2026-11-26）", () => {
     const o = outcomeOf({
       type: "invalid",
       reason: "MIDI の接続が切れた",
+      advice: "MIDI の機器の接続を確かめて、もう一度始めてください。",
       record: { status: "written" },
     });
     expect(o).toEqual({
       kind: "invalid",
       reason: "MIDI の接続が切れた",
+      advice: "MIDI の機器の接続を確かめて、もう一度始めてください。",
       recordError: null,
     });
   });

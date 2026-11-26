@@ -305,8 +305,12 @@ pub enum LiveEvent {
         result: RunResultView,
         record: RecordView,
     },
-    /// 回を無効にした（画面に何を示すかは Q-52）。
-    Invalid { reason: String, record: RecordView },
+    /// 回を無効にした。画面は理由と、次にすることの案内を出す（Q-52 の C。人間の判断 2026-11-26）。
+    Invalid {
+        reason: String,
+        advice: String,
+        record: RecordView,
+    },
 }
 
 fn count(n: usize) -> u32 {
@@ -360,6 +364,22 @@ fn record(r: RecordStatus) -> RecordView {
         RecordStatus::Written(_) => RecordView::Written,
         RecordStatus::Failed(message) => RecordView::Failed { message },
         RecordStatus::NotWritten => RecordView::NotWritten,
+    }
+}
+
+/// 無効の回で、次にすることの案内（Q-52 の C）。
+fn advice(r: InvalidReason) -> String {
+    match r {
+        InvalidReason::Disconnected => {
+            "MIDI の機器の接続（ケーブルと電源）を確かめて、もう一度始めてください。".into()
+        }
+        InvalidReason::Overflow { .. } => {
+            "音を受け取りきれませんでした。ほかのアプリを閉じてから、もう一度始めてください。"
+                .into()
+        }
+        InvalidReason::AudioLost => {
+            "音を出す機器（スピーカーやイヤホン）の接続を確かめて、もう一度始めてください。".into()
+        }
     }
 }
 
@@ -450,6 +470,7 @@ impl LiveEvent {
                 record: r,
             } => LiveEvent::Invalid {
                 reason: reason(why),
+                advice: advice(why),
                 record: record(r),
             },
         })
@@ -459,6 +480,41 @@ impl LiveEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 無効の回は、理由と、次にすることの案内を画面に渡す（Q-52 の C。人間の判断 2026-11-26）。
+    #[test]
+    fn invalid_event_carries_reason_and_advice() {
+        let cases = [
+            (
+                InvalidReason::Disconnected,
+                "MIDI の接続が切れた",
+                "MIDI の機器",
+            ),
+            (
+                InvalidReason::Overflow { count: 3 },
+                "受信のあふれ（3 件）",
+                "ほかのアプリ",
+            ),
+            (
+                InvalidReason::AudioLost,
+                "音声の出力先がなくなった",
+                "音を出す機器",
+            ),
+        ];
+        for (why, text, hint) in cases {
+            let ev = LiveEvent::from_engine(EngineEvent::Invalid {
+                reason: why,
+                record: RecordStatus::NotWritten,
+            })
+            .unwrap();
+            let LiveEvent::Invalid { reason, advice, .. } = ev else {
+                panic!("Invalid でない");
+            };
+            assert_eq!(reason, text);
+            assert!(advice.contains(hint), "{advice}");
+            assert!(advice.contains("もう一度始めて"), "{advice}");
+        }
+    }
 
     #[test]
     fn live_event_is_tagged_and_times_are_numbers() {
