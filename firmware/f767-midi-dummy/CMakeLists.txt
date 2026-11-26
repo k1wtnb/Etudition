@@ -47,13 +47,20 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     App/Src/dummy_app.c
     App/Src/dummy_cmd.c
-    App/Src/dummy_midi_none.c
+    App/Src/dummy_midi_usb.c
+    App/Src/usbd_conf.c
+    App/Src/usbd_desc.c
+    App/Src/usbd_midi.c
+    Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_core.c
+    Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ctlreq.c
+    Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ioreq.c
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     App/Inc
+    Middlewares/ST/STM32_USB_Device_Library/Core/Inc
 )
 
 # Add project symbols (macros)

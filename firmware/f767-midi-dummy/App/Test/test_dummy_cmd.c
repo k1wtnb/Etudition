@@ -1,6 +1,7 @@
 /* dummy_cmd.c の試験（PC の gcc で動かす）。
  * 実行：gcc -std=c11 -Wall -Wextra -Werror -IApp/Inc App/Src/dummy_cmd.c App/Test/test_dummy_cmd.c -o build/test_dummy_cmd && build/test_dummy_cmd
  */
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -56,7 +57,7 @@ int main(void)
 
     if (s_u32Failures != 0U)
     {
-        printf("失敗 %lu 件\n", (unsigned long)s_u32Failures);
+        printf("失敗 %" PRIu32 " 件\n", s_u32Failures);
         return EXIT_FAILURE;
     }
     printf("dummy_cmd: すべて通った\n");

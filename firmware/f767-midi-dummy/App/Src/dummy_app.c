@@ -27,17 +27,19 @@
 /** ボタンで送る音。 */
 #define DUMMY_APP_BUTTON_NOTE 60U
 #define DUMMY_APP_BUTTON_VELOCITY 100U
+/** 文字を失ったことを main に知らせる印（列の中で、壊れた行の終わりの代わりに入る）。 */
+#define DUMMY_APP_RX_LOST 0x15U
 
 /* 割込み（書く側）と main（読む側）が1つずつの列。添字は 32 ビットで、読み書きは1命令で済む */
 static uint8_t s_au8Rx[DUMMY_APP_RX_SIZE];
 static volatile uint32_t s_u32RxHead = 0U; /**< 割込みだけが進める */
 static volatile uint32_t s_u32RxTail = 0U; /**< main だけが進める */
-static volatile bool s_bRxOverflow = false;
 static uint8_t s_u8RxByte = 0U;
+static bool s_bRxDropping = false; /**< 割込みだけが使う。文字を失った後、次の改行まで捨てる */
 
 static char s_szLine[DUMMY_CMD_LINE_MAX + 1U];
 static uint32_t s_u32LineLength = 0U;
-static bool s_bLineTooLong = false;
+static bool s_bLineBad = false; /**< 長すぎる行か、NUL を含む行 */
 
 static uint32_t s_au32Held[4]; /**< 押されている音（128 ビット） */
 static bool s_bButtonDown = false;
@@ -97,11 +99,11 @@ static void HandleLine(void)
 {
     DummyCmd stCmd;
 
-    if (!s_bLineTooLong && (s_u32LineLength == 0U))
+    if (!s_bLineBad && (s_u32LineLength == 0U))
     {
         return; /* 空の行は区切り直しとして黙って捨てる */
     }
-    if (s_bLineTooLong || !DummyCmdParse(s_szLine, &stCmd))
+    if (s_bLineBad || !DummyCmdParse(s_szLine, &stCmd))
     {
         Reply("err\n");
         ShowError();
@@ -115,27 +117,32 @@ static void HandleLine(void)
         Reply(Execute(&stCmd) ? "ok\n" : "busy\n");
     }
     s_u32LineLength = 0U;
-    s_bLineTooLong = false;
+    s_bLineBad = false;
     s_szLine[0] = '\0';
 }
 
 static void PollSerial(void)
 {
-    if (s_bRxOverflow)
-    {
-        /* 途中の文字を失ったので、組み立て中の行は捨てる（次の改行で err を返す） */
-        s_bRxOverflow = false;
-        s_bLineTooLong = true;
-        ShowError();
-    }
     while (s_u32RxTail != s_u32RxHead)
     {
         __DMB(); /* 添字を読んでから文字を読む */
         char cByte = (char)s_au8Rx[s_u32RxTail & (DUMMY_APP_RX_SIZE - 1U)];
         s_u32RxTail++;
 
+        if ((uint8_t)cByte == DUMMY_APP_RX_LOST)
+        {
+            /* この行の途中の文字を割込みが失った。行を捨てて err を返す */
+            s_bLineBad = true;
+            HandleLine();
+            continue;
+        }
         if (cByte == '\r')
         {
+            continue;
+        }
+        if (cByte == '\0')
+        {
+            s_bLineBad = true;
             continue;
         }
         if (cByte == '\n')
@@ -151,7 +158,7 @@ static void PollSerial(void)
         }
         else
         {
-            s_bLineTooLong = true;
+            s_bLineBad = true;
         }
     }
 }
@@ -181,8 +188,11 @@ static void PollButton(uint32_t u32NowMs)
     }
 }
 
-static void PollLeds(uint32_t u32NowMs)
+static void PollLeds(void)
 {
+    /* 時刻は、この周回で ShowError が記録した時刻より前にならないよう、ここで取る */
+    uint32_t u32NowMs = HAL_GetTick();
+
     if ((u32NowMs - s_u32HeartbeatMs) >= DUMMY_APP_HEARTBEAT_MS)
     {
         s_u32HeartbeatMs = u32NowMs;
@@ -214,36 +224,53 @@ void DummyAppPoll(void)
 
     PollSerial();
     PollButton(u32NowMs);
-    PollLeds(u32NowMs);
+    PollLeds();
 }
 
 /* 割込みの中：1文字を列に入れて、受信をかけ直す */
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *pstHuart)
+static void PushRx(uint8_t u8Byte)
 {
-    if (pstHuart != &huart3)
+    s_au8Rx[s_u32RxHead & (DUMMY_APP_RX_SIZE - 1U)] = u8Byte;
+    __DMB(); /* 文字を書いてから添字を進める（コンパイラの並べ替えも止める） */
+    s_u32RxHead++;
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *phUart)
+{
+    bool bHasRoom;
+
+    if (phUart != &huart3)
     {
         return;
     }
-    if ((s_u32RxHead - s_u32RxTail) < DUMMY_APP_RX_SIZE)
+    bHasRoom = (s_u32RxHead - s_u32RxTail) < DUMMY_APP_RX_SIZE;
+    if (s_bRxDropping)
     {
-        s_au8Rx[s_u32RxHead & (DUMMY_APP_RX_SIZE - 1U)] = s_u8RxByte;
-        __DMB(); /* 文字を書いてから添字を進める（コンパイラの並べ替えも止める） */
-        s_u32RxHead++;
+        /* 失った後は、次の改行までを捨て、その改行の代わりに印を入れて行を区切り直す */
+        if ((s_u8RxByte == (uint8_t)'\n') && bHasRoom)
+        {
+            PushRx(DUMMY_APP_RX_LOST);
+            s_bRxDropping = false;
+        }
+    }
+    else if (bHasRoom)
+    {
+        PushRx(s_u8RxByte);
     }
     else
     {
-        s_bRxOverflow = true;
+        s_bRxDropping = true;
     }
     StartReceive();
 }
 
-/* 割込みの中：受信の誤り（オーバーランなど）。文字を失った印を立て、受信をかけ直す */
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *pstHuart)
+/* 割込みの中：受信の誤り（オーバーランなど）。次の改行まで捨てる状態にして、受信をかけ直す */
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *phUart)
 {
-    if (pstHuart != &huart3)
+    if (phUart != &huart3)
     {
         return;
     }
-    s_bRxOverflow = true;
+    s_bRxDropping = true;
     StartReceive();
 }

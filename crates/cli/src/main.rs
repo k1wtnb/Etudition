@@ -8,8 +8,6 @@
 //!   コールバックごとの時刻の組を1行ずつ書き、ずれと遅れの最小・平均・最大を出す（S2a）。音量 0 なら音を出さない。
 //! - `etudition-cli midi-log <秒> <出力.jsonl>`：MIDI の入力（最初の機器）を受け、`EngineClock` の時刻と midir の時刻と
 //!   バイト列を1行ずつ書く（F0 と S2b の受信を記録する最小のプログラム）。
-//! - `etudition-cli midi-send <ポート> <指示>`：F0 のダミー機器へ、ST-LINK の仮想 COM ポートで指示を送る。指示は
-//!   `ping`、`on <ノート> <ベロシティ>`、`off <ノート>`、`beat <回数> <間隔ms>`（ノート 60 を一定の間隔で押して離す）。
 
 use std::process::ExitCode;
 
@@ -30,11 +28,6 @@ fn main() -> ExitCode {
     {
         return midi_log(secs, std::path::Path::new(out));
     }
-    if let [cmd, port, rest @ ..] = args.as_slice()
-        && cmd == "midi-send"
-    {
-        return midi_send(port, rest);
-    }
     if let [cmd, secs, bpm, volume, out] = args.as_slice()
         && cmd == "click-check"
     {
@@ -44,7 +37,7 @@ fn main() -> ExitCode {
         [cmd, path] if cmd == "s1" || cmd == "s1-xml" => (cmd.as_str(), path),
         _ => {
             eprintln!(
-                "etudition-cli {}\n使い方: etudition-cli s1 <楽譜のパス> | etudition-cli s1-xml <楽譜のパス> | etudition-cli make-errors <楽譜のパス> <出力のフォルダ> | etudition-cli click-check <秒> <テンポ> <音量 0〜1> <出力.jsonl> | etudition-cli midi-log <秒> <出力.jsonl> | etudition-cli midi-send <ポート> <指示>",
+                "etudition-cli {}\n使い方: etudition-cli s1 <楽譜のパス> | etudition-cli s1-xml <楽譜のパス> | etudition-cli make-errors <楽譜のパス> <出力のフォルダ> | etudition-cli click-check <秒> <テンポ> <音量 0〜1> <出力.jsonl> | etudition-cli midi-log <秒> <出力.jsonl>",
                 env!("CARGO_PKG_VERSION")
             );
             return ExitCode::from(2);
@@ -271,111 +264,6 @@ fn midi_log(secs: &str, out: &std::path::Path) -> ExitCode {
     );
     // あふれ（取りこぼし）があれば、失敗で終える（測り直しが要ることを示す）
     if overflow.load(Ordering::Relaxed) > 0 {
-        return ExitCode::FAILURE;
-    }
-    ExitCode::SUCCESS
-}
-
-/// F0 のダミー機器へ指示を送り、返事を確かめる。`beat` は予定の時刻に合わせて送る。
-fn midi_send(port: &str, rest: &[String]) -> ExitCode {
-    use etudition_cli::midi_send::{parse, port_path, reply_ok, schedule, split_lines, wait_reply};
-    use std::io::{Read, Write};
-    use std::time::{Duration, Instant};
-
-    let cmd = match parse(rest) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(2);
-        }
-    };
-    let path = port_path(port);
-    // Windows の COM ポートは、速さなどを `mode` で合わせてから開く（ファームは 115200 bps、8N1）
-    if let Some(name) = path.strip_prefix(r"\\.\") {
-        let status = std::process::Command::new("mode")
-            .args([name, "BAUD=115200", "PARITY=N", "DATA=8", "STOP=1"])
-            .stdout(std::process::Stdio::null())
-            .status();
-        if !matches!(status, Ok(s) if s.success()) {
-            eprintln!(
-                "{name} の設定（mode）ができない。ポート名と、ほかのソフトが開いていないかを確かめる"
-            );
-            return ExitCode::FAILURE;
-        }
-    }
-    let mut serial = match std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&path)
-    {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("{port} を開けない: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let mut reader = match serial.try_clone() {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("{port} を読む準備ができない: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
-    // 返事を読むスレッド（読み出しが待ち続けても、送る側は時間切れで止まれる）
-    std::thread::spawn(move || {
-        let (mut buf, mut partial) = ([0u8; 64], String::new());
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => std::thread::sleep(Duration::from_millis(1)),
-                Ok(n) => {
-                    for line in split_lines(&mut partial, &buf[..n]) {
-                        if tx.send(line).is_err() {
-                            return;
-                        }
-                    }
-                }
-                Err(_) => return,
-            }
-        }
-    });
-    // ファームに途中まで届いた行が残っていても、空の行で区切り直す（ファームは空の行に返事をしない）
-    let _ = serial.write_all(b"\n");
-    std::thread::sleep(Duration::from_millis(50));
-    while rx.try_recv().is_ok() {}
-    let plan = schedule(&cmd);
-    let start = Instant::now();
-    let (mut sent, mut failed) = (0usize, 0usize);
-    for (at_ms, line) in &plan {
-        let due = start + Duration::from_millis(*at_ms);
-        if let Some(wait) = due.checked_duration_since(Instant::now()) {
-            std::thread::sleep(wait);
-        }
-        if let Err(e) = serial.write_all(line.as_bytes()) {
-            eprintln!("送れない: {e}");
-            return ExitCode::FAILURE;
-        }
-        sent += 1;
-        match wait_reply(&rx, Duration::from_millis(500)) {
-            Ok(reply) if reply_ok(line, &reply) => {
-                if plan.len() == 1 {
-                    println!("{} → {reply}", line.trim_end());
-                }
-            }
-            Ok(reply) => {
-                eprintln!("{} → {reply}", line.trim_end());
-                failed += 1;
-            }
-            Err(e) => {
-                eprintln!("{} → {e}", line.trim_end());
-                return ExitCode::FAILURE;
-            }
-        }
-    }
-    if plan.len() > 1 {
-        println!("送った行 {sent} 個。失敗 {failed} 個。");
-    }
-    if failed > 0 {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS

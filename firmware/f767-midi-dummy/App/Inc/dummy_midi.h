@@ -1,6 +1,6 @@
 /**
  * @file dummy_midi.h
- * @brief MIDI の送り先（USB MIDI）。実装は USB の方式が決まってから足す。
+ * @brief MIDI の送り先（利用者用の USB 端子の USB MIDI。実装は dummy_midi_usb.c）。
  */
 #ifndef DUMMY_MIDI_H
 #define DUMMY_MIDI_H
