@@ -2,6 +2,7 @@
 //!
 //! - `etudition-cli s1 <楽譜のパス>`：書かれた音符、展開後の小節、鳴る音、読めない要素を JSON で出す（S1）。
 //! - `etudition-cli s1-xml <楽譜のパス>`：楽譜の XML の文字列を出す（`.mxl` は展開する。OSMD に渡す用）。
+//! - `etudition-cli make-errors <楽譜のパス> <出力のフォルダ>`：誤りの種類ごとの MIDI を作る（計画 1a-3。種類は `errors::CASES`）。
 
 use std::process::ExitCode;
 
@@ -12,11 +13,16 @@ use serde_json::{Value, json};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [cmd, path, out] = args.as_slice()
+        && cmd == "make-errors"
+    {
+        return make_errors(path, std::path::Path::new(out));
+    }
     let (cmd, path) = match args.as_slice() {
         [cmd, path] if cmd == "s1" || cmd == "s1-xml" => (cmd.as_str(), path),
         _ => {
             eprintln!(
-                "etudition-cli {}\n使い方: etudition-cli s1 <楽譜のパス> | etudition-cli s1-xml <楽譜のパス>",
+                "etudition-cli {}\n使い方: etudition-cli s1 <楽譜のパス> | etudition-cli s1-xml <楽譜のパス> | etudition-cli make-errors <楽譜のパス> <出力のフォルダ>",
                 env!("CARGO_PKG_VERSION")
             );
             return ExitCode::from(2);
@@ -39,6 +45,41 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// 誤りの種類ごとの MIDI を `out` に書く（`<名前>.mid`）。
+fn make_errors(path: &str, out: &std::path::Path) -> ExitCode {
+    let loaded = match std::fs::read(path)
+        .map_err(|e| ReadError(format!("{path} を開けない: {e}")))
+        .and_then(|b| read_score(&b))
+    {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("読めない: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let e = expand(&loaded.score);
+    if let Err(issues) = etudition_core::expand::check_playable(&e) {
+        eprintln!("採点に使えない楽譜: {issues:?}");
+        return ExitCode::FAILURE;
+    }
+    if let Err(err) = std::fs::create_dir_all(out) {
+        eprintln!("出力のフォルダを作れない: {err}");
+        return ExitCode::FAILURE;
+    }
+    for c in etudition_cli::errors::CASES {
+        let midi = etudition_cli::errors::make_error_midi(&e, c.errors);
+        if let Err(err) = std::fs::write(out.join(format!("{}.mid", c.name)), midi) {
+            eprintln!("{} を書けない: {err}", c.name);
+            return ExitCode::FAILURE;
+        }
+        println!(
+            "{}.mid（{}、期待：音程 {} タイミング {} 長さ {} 組 {}）",
+            c.name, c.row, c.expected.0, c.expected.1, c.expected.2, c.expected.3
+        );
+    }
+    ExitCode::SUCCESS
 }
 
 /// 四分音符の数を `{"num": 分子, "den": 分母}` にする。
