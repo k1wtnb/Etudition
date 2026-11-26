@@ -123,3 +123,11 @@ export function quarterTempo(bpm: number, beat: Beat): TempoView {
 export function tempoInBeats(quarterBpm: number, beat: Beat): number {
   return Math.round((quarterBpm * beat.den) / beat.num);
 }
+
+/**
+ * クリックを受けた画面の時刻（`performance.now()` の ms）と、そのクリックの予定時刻から、時刻 0（前カウントの最初のクリック）に
+ * 当たる画面の時刻を求める。カーソルはこれを基準に進めるので、クリックを受けるたびにクリックに沿い直す（AC-17）。
+ */
+export function anchorOf(receivedMs: number, at: UiTime): number {
+  return receivedMs - Number(at.ns) / 1e6;
+}

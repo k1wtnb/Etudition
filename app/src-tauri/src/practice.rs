@@ -12,6 +12,7 @@ use etudition_core::meter::Meter;
 use etudition_core::rules::{Rules, rules_v1};
 use etudition_core::score::read_score;
 use etudition_core::timing::{Tempo, Timing, span_to_ns};
+use etudition_engine::click::AudioOut;
 use etudition_engine::input::{MidiInput, StartError};
 use etudition_engine::record::score_hash;
 use etudition_engine::session::{OpenSession, PracticeSetup, RunMode, open_session};
@@ -110,6 +111,7 @@ pub fn open(
     loaded: &Loaded,
     timing: Timing,
     input: Box<dyn MidiInput + Send>,
+    audio: Option<Box<dyn AudioOut + Send>>,
     record_dir: PathBuf,
 ) -> Result<OpenSession, StartError> {
     let setup = PracticeSetup {
@@ -121,7 +123,7 @@ pub fn open(
         record_dir,
         rules: rules_of(loaded),
     };
-    open_session(setup, input)
+    open_session(setup, input, audio)
 }
 
 /// 開いた回を練習のスレッドで進め、通知を `send` に渡す。画面に渡せない時刻（約104日を超える）を含む通知は、
@@ -206,7 +208,15 @@ pub fn feed_midi_file<R: Runtime>(
         .map_err(|e| e.to_string())?;
     let root = state.record_root_or(|| app.path().app_data_dir().map_err(|e| e.to_string()))?;
     let stop = begin(&state)?;
-    let open = match open(&loaded, timing, Box::new(input), record_dir(&root)) {
+    // 鳴らさない出力でクリックの時刻を作り、画面のカーソルをクリックに沿わせる（1a-5。B0 の5章）
+    let audio = Box::new(etudition_engine::click::FakeOut::new(0, 0));
+    let open = match open(
+        &loaded,
+        timing,
+        Box::new(input),
+        Some(audio),
+        record_dir(&root),
+    ) {
         Ok(o) => o,
         Err(e) => {
             end(&app);
@@ -434,6 +444,28 @@ mod tests {
         assert_eq!(got[0]["type"], "started");
         assert_eq!(got[0]["origin"]["ns"], 400_000_000_i64);
         assert!(got.iter().any(|v| v["type"] == "marks"));
+        // 流し込みでも偽の音声出力でクリックが届く（カーソルをクリックに沿わせるため。AC-17。1a-5）。
+        // T1 は 4/4、♩＝600：前カウントは 0、100、200、300 ms
+        let clicks: Vec<(i64, bool)> = got
+            .iter()
+            .filter(|v| v["type"] == "click")
+            .map(|v| {
+                (
+                    v["at"]["ns"].as_i64().unwrap(),
+                    v["count_in"].as_bool().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            &clicks[..5],
+            &[
+                (0, true),
+                (100_000_000, true),
+                (200_000_000, true),
+                (300_000_000, true),
+                (400_000_000, false)
+            ]
+        );
         let ended = got.iter().find(|v| v["type"] == "ended").unwrap();
         assert_eq!(ended["result"]["passed"], true);
         assert_eq!(ended["result"]["end_at"]["ns"], 1_600_000_000_i64);

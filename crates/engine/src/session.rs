@@ -17,14 +17,19 @@ use etudition_core::scoring::{
 };
 use etudition_core::timing::{Timing, position_to_ns, span_to_ns};
 
+use crate::click::{AudioMsg, AudioOut, ClickPlan, ClickStamp};
 use crate::clock::EngineClock;
 use crate::input::{InputMsg, InputSink, MidiInput, RawMidi, StartError};
-use crate::record::{EventRecord, RecordStatus, RunRecord, TempoRecord, write_run};
+use crate::record::{ClickRecord, EventRecord, RecordStatus, RunRecord, TempoRecord, write_run};
 
 /// 期限を待つ間に起きる間隔（`engine` の定数で、採点の規則ではない）。
 pub const ENGINE_TICK: Duration = Duration::from_millis(10);
 /// 入力から練習のスレッドへの列の長さ。
 const QUEUE_CAPACITY: usize = 4096;
+/// 音声から練習のスレッドへの列の長さ（流し込みの偽の出力は、始めたときに全部のクリックを送る）。
+const AUDIO_QUEUE_CAPACITY: usize = 8192;
+/// 時刻の原点（前カウントの最初のクリック）を、開いた時刻からこれだけ後にする（最初のクリックを予定どおりに鳴らすため）。
+pub const START_LEAD: Duration = Duration::from_millis(300);
 
 /// 回の設定。
 pub struct PracticeSetup {
@@ -142,15 +147,21 @@ pub struct OpenSession {
     consumer: rtrb::Consumer<InputMsg>,
     overflow: Arc<AtomicU32>,
     clock: EngineClock,
+    audio: Option<Box<dyn AudioOut + Send>>,
+    audio_rx: rtrb::Consumer<AudioMsg>,
+    plan: ClickPlan,
+    /// 受けたクリックの組。
+    stamps: Vec<ClickStamp>,
 }
 
-/// 時計と列を作り、入力を開く（コマンドのスレッドで呼ぶ。機器を開くのはここの1回だけ）。
-/// 1a-5 で音声の引数を足す。
+/// 時計と列を作り、入力を開き、クリックを始める（コマンドのスレッドで呼ぶ。機器を開くのはここの1回だけ）。
+/// 音声の出力先を開けなければ、入力を閉じて `NoAudioOutput` などを返す（REQ-107。ファイルは作らない）。
 pub fn open_session(
     setup: PracticeSetup,
     mut input: Box<dyn MidiInput + Send>,
+    mut audio: Option<Box<dyn AudioOut + Send>>,
 ) -> Result<OpenSession, StartError> {
-    let clock = EngineClock::new(Instant::now());
+    let clock = EngineClock::new(Instant::now() + START_LEAD);
     let (producer, consumer) = rtrb::RingBuffer::new(QUEUE_CAPACITY);
     let overflow = Arc::new(AtomicU32::new(0));
     input.open(
@@ -160,12 +171,24 @@ pub fn open_session(
             overflow: Arc::clone(&overflow),
         },
     )?;
+    let plan = ClickPlan::new(&setup.timing, setup.meter, &setup.expansion);
+    let (audio_tx, audio_rx) = rtrb::RingBuffer::new(AUDIO_QUEUE_CAPACITY);
+    if let Some(a) = audio.as_mut()
+        && let Err(e) = a.start(clock, &plan, audio_tx)
+    {
+        input.close();
+        return Err(e);
+    }
     Ok(OpenSession {
         setup,
         input,
         consumer,
         overflow,
         clock,
+        audio,
+        audio_rx,
+        plan,
+        stamps: Vec::new(),
     })
 }
 
@@ -214,7 +237,31 @@ impl OpenSession {
             RunMode::Live => self.run_live(notify, stop),
         };
         self.input.close();
+        if let Some(a) = self.audio.as_mut() {
+            a.stop();
+        }
         outcome
+    }
+
+    /// 音声の列を空にする。組は覚え、出力先を失っていたら `true`。
+    fn drain_audio(&mut self, mut on_stamp: impl FnMut(&ClickStamp, bool)) -> bool {
+        let mut lost = false;
+        while let Ok(m) = self.audio_rx.pop() {
+            match m {
+                AudioMsg::Stamp(s) => {
+                    let count_in = self
+                        .plan
+                        .clicks
+                        .get(usize::try_from(s.index).unwrap_or(usize::MAX))
+                        .is_some_and(|c| c.count_in);
+                    on_stamp(&s, count_in);
+                    self.stamps.push(s);
+                }
+                AudioMsg::Callback(_) => {}
+                AudioMsg::Lost => lost = true,
+            }
+        }
+        lost
     }
 
     /// `EngineClock` が `at_ns` になるまで待つ。途中で終了の要求が来たら `false`。
@@ -252,25 +299,45 @@ impl OpenSession {
                 Err(_) => std::thread::sleep(Duration::from_millis(1)),
             }
         }
+        // 偽の出力は始めたときに全部の組を送っている。失っていたら無効の回（REQ-107）
+        let mut clicks = Vec::new();
+        if self.drain_audio(|s, count_in| clicks.push((*s, count_in))) {
+            return self.invalid(InvalidReason::AudioLost, &raw, notify, stop);
+        }
         let perf = to_perf(&raw, self.setup.correction_ns);
         let Some(end) = decide_end(&self.input(&perf), i64::MAX) else {
             return SessionOutcome::NotStarted(StartError::Other("お手本の音がない".into()));
         };
-        // 終わりの時刻まで、受けたノートオンと窓が閉じた音の印を、時刻の順に知らせる
-        let mut timeline: Vec<(i64, u8, EngineEvent)> = perf
+        // 終わりの時刻まで、クリック、受けたノートオン、窓が閉じた音の印を、時刻の順に知らせる（同じ時刻ならこの順）
+        let mut timeline: Vec<(i64, u8, EngineEvent)> = clicks
             .iter()
-            .filter(|e| e.kind == PerfKind::On && e.velocity != 0 && e.t_ns <= end.at_ns)
-            .map(|e| {
+            .filter(|(s, _)| s.scheduled_ns <= end.at_ns)
+            .map(|(s, count_in)| {
                 (
-                    e.t_ns,
+                    s.scheduled_ns,
                     0,
-                    EngineEvent::NoteReceived {
-                        note: e.note,
-                        at_ns: e.t_ns,
+                    EngineEvent::Click {
+                        index: s.index,
+                        count_in: *count_in,
+                        scheduled_ns: s.scheduled_ns,
                     },
                 )
             })
             .collect();
+        timeline.extend(
+            perf.iter()
+                .filter(|e| e.kind == PerfKind::On && e.velocity != 0 && e.t_ns <= end.at_ns)
+                .map(|e| {
+                    (
+                        e.t_ns,
+                        1,
+                        EngineEvent::NoteReceived {
+                            note: e.note,
+                            at_ns: e.t_ns,
+                        },
+                    )
+                }),
+        );
         let w = span_to_ns(&self.setup.timing.tempo, self.setup.rules.match_window);
         let mut closes: Vec<i64> = self
             .setup
@@ -285,7 +352,7 @@ impl OpenSession {
         for c in closes {
             let marks = marks_closed_between(&self.input(&perf), prev, c);
             if !marks.is_empty() {
-                timeline.push((c, 1, EngineEvent::Marks(marks)));
+                timeline.push((c, 2, EngineEvent::Marks(marks)));
             }
             prev = c;
         }
@@ -329,6 +396,15 @@ impl OpenSession {
                     }
                     InputMsg::Finished => {}
                 }
+            }
+            if self.drain_audio(|s, count_in| {
+                notify(EngineEvent::Click {
+                    index: s.index,
+                    count_in,
+                    scheduled_ns: s.scheduled_ns,
+                });
+            }) {
+                return self.invalid(InvalidReason::AudioLost, &raw, notify, stop);
             }
             let now = self.clock.ns_of(Instant::now());
             let perf = to_perf(&raw, self.setup.correction_ns);
@@ -380,7 +456,18 @@ impl OpenSession {
                     bytes: r.bytes[..usize::from(r.len.min(3))].to_vec(),
                 })
                 .collect(),
-            clicks: Vec::new(),
+            clicks: self
+                .stamps
+                .iter()
+                .filter(|s| s.scheduled_ns <= until_ns)
+                .map(|s| ClickRecord {
+                    index: s.index,
+                    scheduled_ns: s.scheduled_ns,
+                    cpal_callback_ns: s.cpal_ts.callback_ns,
+                    cpal_playback_ns: s.cpal_ts.playback_ns,
+                    at_ns: s.at_ns,
+                })
+                .collect(),
             result,
             invalid_reason: invalid.map(InvalidReason::text),
             overflow_count: self.overflow.load(Ordering::Relaxed),

@@ -4,6 +4,8 @@
 //! - `etudition-cli s1-xml <楽譜のパス>`：楽譜の XML の文字列を出す（`.mxl` は展開する。OSMD に渡す用）。
 //! - `etudition-cli make-errors <楽譜のパス> <出力のフォルダ>`：誤りの種類ごとの MIDI を作る（計画 1a-3。種類は `errors::CASES`。
 //!   合成の楽譜 T1 だけを受け付ける）。
+//! - `etudition-cli click-check <秒> <テンポ（四分音符／分）> <音量 0〜1> <出力.jsonl>`：cpal で 4/4 のクリックを鳴らし、
+//!   コールバックごとの時刻の組を1行ずつ書き、ずれと遅れの最小・平均・最大を出す（S2a）。音量 0 なら音を出さない。
 
 use std::process::ExitCode;
 
@@ -19,11 +21,16 @@ fn main() -> ExitCode {
     {
         return make_errors(path, std::path::Path::new(out));
     }
+    if let [cmd, secs, bpm, volume, out] = args.as_slice()
+        && cmd == "click-check"
+    {
+        return click_check(secs, bpm, volume, std::path::Path::new(out));
+    }
     let (cmd, path) = match args.as_slice() {
         [cmd, path] if cmd == "s1" || cmd == "s1-xml" => (cmd.as_str(), path),
         _ => {
             eprintln!(
-                "etudition-cli {}\n使い方: etudition-cli s1 <楽譜のパス> | etudition-cli s1-xml <楽譜のパス> | etudition-cli make-errors <楽譜のパス> <出力のフォルダ>",
+                "etudition-cli {}\n使い方: etudition-cli s1 <楽譜のパス> | etudition-cli s1-xml <楽譜のパス> | etudition-cli make-errors <楽譜のパス> <出力のフォルダ> | etudition-cli click-check <秒> <テンポ> <音量 0〜1> <出力.jsonl>",
                 env!("CARGO_PKG_VERSION")
             );
             return ExitCode::from(2);
@@ -92,6 +99,94 @@ fn make_errors(path: &str, out: &std::path::Path) -> ExitCode {
         );
     }
     ExitCode::SUCCESS
+}
+
+/// S2a：cpal でクリックを鳴らし、時刻の組を記録する。
+fn click_check(secs: &str, bpm: &str, volume: &str, out: &std::path::Path) -> ExitCode {
+    use etudition_engine::click::{AudioMsg, AudioOut, CpalOut};
+    use etudition_engine::clock::EngineClock;
+    use std::fmt::Write as _;
+    use std::time::{Duration, Instant};
+
+    let (Ok(secs), Ok(bpm), Ok(volume)) = (
+        secs.parse::<u32>(),
+        bpm.parse::<u32>(),
+        volume.parse::<f32>(),
+    ) else {
+        eprintln!("秒とテンポは正の整数、音量は 0〜1 の数");
+        return ExitCode::from(2);
+    };
+    if secs == 0 || bpm == 0 {
+        eprintln!("秒とテンポは正の整数");
+        return ExitCode::from(2);
+    }
+    let interval_ns = 60_000_000_000 / i64::from(bpm);
+    let plan = etudition_cli::click_check::plan(
+        etudition_cli::click_check::click_count(secs, bpm),
+        interval_ns,
+    );
+    let (tx, mut rx) = etudition_engine::rtrb::RingBuffer::new(8192);
+    let mut audio = CpalOut::new(volume).with_callback_log();
+    let lead = Duration::from_millis(300);
+    if let Err(e) = audio.start(EngineClock::new(Instant::now() + lead), &plan, tx) {
+        eprintln!("鳴らせない: {e}");
+        return ExitCode::FAILURE;
+    }
+    let until =
+        Instant::now() + lead + Duration::from_secs(u64::from(secs)) + Duration::from_millis(500);
+    let mut stamps = Vec::new();
+    let mut lines = String::new();
+    let mut lost = false;
+    let mut take = |m: AudioMsg| match m {
+        AudioMsg::Stamp(s) => {
+            let _ = writeln!(lines, "{}", etudition_cli::click_check::stamp_json(&s));
+            stamps.push(s);
+        }
+        AudioMsg::Callback(l) => {
+            let _ = writeln!(lines, "{}", etudition_cli::click_check::callback_json(&l));
+        }
+        AudioMsg::Lost => lost = true,
+    };
+    while Instant::now() < until {
+        while let Ok(m) = rx.pop() {
+            take(m);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    audio.stop();
+    while let Ok(m) = rx.pop() {
+        take(m);
+    }
+    if let Err(e) = std::fs::write(out, lines) {
+        eprintln!("{} を書けない: {e}", out.display());
+        return ExitCode::FAILURE;
+    }
+    let sum = etudition_cli::click_check::summarize(&stamps);
+    println!(
+        "クリック {} 個（予定 {} 個）。鳴った時刻 − 予定時刻（ms）：最小 {:.3} 平均 {:.3} 最大 {:.3}。再生までの遅れ（ms）：最小 {:.3} 平均 {:.3} 最大 {:.3}。出力先を失った：{}",
+        sum.count,
+        plan.clicks.len(),
+        ms(sum.offset_ns.0),
+        sum.offset_ns.1 / 1e6,
+        ms(sum.offset_ns.2),
+        ms(sum.latency_ns.0),
+        sum.latency_ns.1 / 1e6,
+        ms(sum.latency_ns.2),
+        if lost { "はい" } else { "いいえ" }
+    );
+    if !audio.complete() {
+        eprintln!("コールバックの記録が欠けたか、停止までに受け取り切れなかった");
+    }
+    // 欠けたクリックや出力先の喪失があれば、失敗で終える（測り直しが要ることを示す）
+    if !etudition_cli::click_check::usable(lost, sum.count, plan.clicks.len(), audio.complete()) {
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn ms(ns: i64) -> f64 {
+    ns as f64 / 1e6
 }
 
 /// 四分音符の数を `{"num": 分子, "den": 分母}` にする。
