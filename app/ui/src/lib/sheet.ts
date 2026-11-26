@@ -104,7 +104,10 @@ export class Sheet {
     this.drawn.clear();
   }
 
-  /** お手本の ref_index の音に印を描く。`replace` なら同じ符頭の前の印は消す（繰り返しの2回目で重ねない）。描けなければ false。 */
+  /**
+   * お手本の ref_index の音に印を描く。`replace` なら同じ符頭の前の印は消す（繰り返しの2回目で重ねない）。
+   * `replace` でなければ前の印を残し、文字は1行上に置く（止まった位置の印が、前の回の誤りと重ならないように）。描けなければ false。
+   */
   mark(
     refIndex: number,
     style: MarkStyle,
@@ -118,8 +121,9 @@ export class Sheet {
     const pass = w.pass > 1 ? `(${w.pass}回目)` : "";
     if (!replace) {
       const label = `${style.label}${pass}${extra}`;
+      const row = this.drawn.has(o) ? 1 : 0;
       return (
-        drawMark(this.osmd, this.layer, this.notes[o], style, label) !==
+        drawMark(this.osmd, this.layer, this.notes[o], style, label, row) !==
         undefined
       );
     }

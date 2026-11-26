@@ -84,3 +84,11 @@ const NAMES = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A�
 export function noteName(note: number): string {
   return `${NAMES[note % 12]}${Math.floor(note / 12) - 1}`;
 }
+
+/** 印の文字の1行の高さ（文字の大きさ 11 より少し大きく）。 */
+const LABEL_LINE = 13;
+
+/** 符頭の上端 top から、row 行目（0 が符頭のすぐ上）の文字の基線の y を求める。 */
+export function labelY(top: number, row: number): number {
+  return top - 9 - row * LABEL_LINE;
+}

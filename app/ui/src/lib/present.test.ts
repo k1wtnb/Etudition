@@ -3,6 +3,7 @@ import type { MarkView } from "./bindings/MarkView";
 import {
   cursorStepAt,
   formatScore,
+  labelY,
   type MarkKind,
   markKind,
   markStyle,
@@ -112,5 +113,15 @@ describe("音名", () => {
     expect(noteName(69)).toBe("A4");
     expect(noteName(21)).toBe("A0");
     expect(noteName(0)).toBe("C-1");
+  });
+});
+
+describe("印の文字の高さ", () => {
+  it("同じ符頭に2つ目の文字を描くときは、1つ目と重ならないよう1行上に置く（Astra の監査）", () => {
+    const top = 100;
+    expect(labelY(top, 0)).toBe(91);
+    expect(labelY(top, 1)).toBe(78);
+    // 1行の高さは文字の大きさ（11）より大きい
+    expect(labelY(top, 0) - labelY(top, 1)).toBeGreaterThan(11);
   });
 });

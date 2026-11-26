@@ -6,7 +6,7 @@ import type {
   VexFlowGraphicalNote,
 } from "opensheetmusicdisplay";
 import type { OsmdNote } from "./match";
-import type { MarkStyle } from "./present";
+import { labelY, type MarkStyle } from "./present";
 
 /** OSMD の楽譜から、休符でない音符と、その突き合わせ用の値を取り出す。 */
 export function extractNotes(osmd: OpenSheetMusicDisplay): {
@@ -164,7 +164,7 @@ function svg<K extends keyof SVGElementTagNameMap>(
 
 /**
  * 音符の符頭に、印の形（丸・左向きの三角・右向きの三角・×・点線の枠）と文字を描く（REQ-090。色だけに頼らない）。
- * 描いた要素を返す。描けなければ undefined（符頭が見つからない）。
+ * 文字は row 行目に置く（同じ符頭に2つ目の文字を描くときは 1）。描いた要素を返す。描けなければ undefined（符頭が見つからない）。
  */
 export function drawMark(
   osmd: OpenSheetMusicDisplay,
@@ -172,6 +172,7 @@ export function drawMark(
   note: Note,
   style: MarkStyle,
   label: string,
+  row = 0,
 ): SVGElement[] | undefined {
   const el = noteheadOf(osmd, note);
   if (!el) return undefined;
@@ -251,7 +252,7 @@ export function drawMark(
   }
   const text = svg("text", {
     x: b.x,
-    y: b.y - pad - 6,
+    y: labelY(b.y, row),
     fill: style.color,
     "font-size": 11,
   });
