@@ -360,9 +360,14 @@ impl AudioOut for CpalOut {
                 let _ = ready_tx.send(Err(StartError::NoAudioOutput));
                 return;
             };
-            let Ok(supported) = device.default_output_config() else {
-                let _ = ready_tx.send(Err(StartError::NoAudioOutput));
-                return;
+            let supported = match device.default_output_config() {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = ready_tx.send(Err(StartError::Other(format!(
+                        "音声の出力の形式を読めない: {e}"
+                    ))));
+                    return;
+                }
             };
             let config = supported.config();
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -403,8 +408,10 @@ impl AudioOut for CpalOut {
             };
             let stream = match built.and_then(|s| s.play().map(|()| s)) {
                 Ok(s) => s,
-                Err(_) => {
-                    let _ = ready_tx.send(Err(StartError::NoAudioOutput));
+                Err(e) => {
+                    let _ = ready_tx.send(Err(StartError::Other(format!(
+                        "音声の出力を始められない: {e}"
+                    ))));
                     return;
                 }
             };
