@@ -1,23 +1,8 @@
 <script lang="ts">
-import { onMount } from "svelte";
-import { p0TimeProbe } from "./lib/commands";
-
-// P0 の④の確かめ：Rust から受け取った時刻の値と型を表示する
-let probe = $state("確かめ中");
-
-onMount(async () => {
-  try {
-    const t = await p0TimeProbe();
-    const exact = t.ns === Number.MAX_SAFE_INTEGER;
-    probe = `ns=${t.ns}（${typeof t.ns}、上限と一致：${exact}）`;
-  } catch (e) {
-    probe = `失敗：${String(e)}`;
-  }
-});
+// 練習の画面は 1a-7 で作る（境界の約束 B0 の5章のコマンドを使う）
 </script>
 
 <main>
   <h1>Etudition</h1>
-  <p>P0 の空のアプリ</p>
-  <p>時刻の確かめ：{probe}</p>
+  <p>練習の画面は準備中です（1a-7）。</p>
 </main>

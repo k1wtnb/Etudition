@@ -12,7 +12,8 @@ pub const MAX_UI_NS: i64 = (1_i64 << 53) - 1;
 
 /// 画面に渡す時刻（前カウントの最初のクリックを 0 とする、符号付きのナノ秒）。
 /// 範囲の確かめを必ず通すため、値は `UiTime::new` でだけ作れる。
-#[derive(Debug, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "../../ui/src/lib/bindings/")]
 pub struct UiTime {
     #[ts(type = "number")]
     ns: i64,
@@ -29,12 +30,6 @@ impl UiTime {
             ))
         }
     }
-}
-
-/// P0 の④の確かめ：代表値（範囲の上限）を画面に返す。画面が number として同じ値を受け取るかを見る。
-#[tauri::command]
-pub fn p0_time_probe() -> Result<UiTime, String> {
-    UiTime::new(MAX_UI_NS)
 }
 
 #[cfg(test)]
@@ -64,7 +59,7 @@ mod tests {
 
     #[test]
     fn json_has_exact_integer() {
-        let json = serde_json::to_string(&p0_time_probe().unwrap()).unwrap();
+        let json = serde_json::to_string(&UiTime::new(MAX_UI_NS).unwrap()).unwrap();
         assert_eq!(json, r#"{"ns":9007199254740991}"#);
     }
 }

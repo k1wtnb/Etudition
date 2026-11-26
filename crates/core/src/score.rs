@@ -66,6 +66,8 @@ pub struct Measure {
     pub number: String,
     /// 長さ（四分音符の数）。中身の終わりの最大。中身がなければ拍子の長さ。
     pub length: Quarters,
+    /// この小節に当たる拍子の長さ（四分音符の数。`time` がなければ 4/4）。前カウントの拍の数に使う（B06）。
+    pub time_length: Quarters,
     /// `implicit="yes"`（弱起など、数えない小節）。
     pub implicit: bool,
     /// 左の小節線に前向きの繰り返し記号がある。
@@ -392,6 +394,7 @@ fn parse_xml(xml: &str) -> Result<Score, ReadError> {
                 n => issue(n, "measure の中の読まない要素".into()),
             }
         }
+        measure.time_length = time_length;
         measure.length = if end == Quarters::ZERO {
             time_length
         } else {
