@@ -1,4 +1,4 @@
-// S1：OSMD に触る部分（薄くする）。音符を素の値の列にする・カーソルを1周させる・自分の SVG の層に印を描く。
+// OSMD に触る部分（薄くする。S1 から移した）。音符を素の値の列にする・カーソルを1周させる・自分の SVG の層に印を描く。
 import type {
   Fraction,
   Note,
@@ -6,6 +6,7 @@ import type {
   VexFlowGraphicalNote,
 } from "opensheetmusicdisplay";
 import type { OsmdNote } from "./match";
+import { labelY, type MarkStyle } from "./present";
 
 /** OSMD の楽譜から、休符でない音符と、その突き合わせ用の値を取り出す。 */
 export function extractNotes(osmd: OpenSheetMusicDisplay): {
@@ -97,16 +98,24 @@ export function walkCursor(osmd: OpenSheetMusicDisplay): {
   return { steps, measures };
 }
 
-/** カーソルを steps の i 歩目に置いて見せる。 */
-export function moveCursorTo(osmd: OpenSheetMusicDisplay, i: number): void {
+/** カーソルを i 歩目に置いて見せる。今の歩より先なら進め、前なら頭から進め直す。 */
+export function moveCursor(
+  osmd: OpenSheetMusicDisplay,
+  from: number,
+  to: number,
+): number {
   const c = osmd.cursor;
-  c.reset();
-  for (let k = 0; k < i; k++) c.next();
+  let at = from;
+  if (to < at || at < 0) {
+    c.reset();
+    at = 0;
+  }
+  for (; at < to; at++) c.next();
   c.show();
-  c.update();
+  return at;
 }
 
-const LAYER_ID = "s1-marks";
+const LAYER_ID = "etudition-marks";
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 /** 自分の SVG の層（OSMD の svg の最後の子の g）を作り直して返す。 */
@@ -144,33 +153,110 @@ export function noteheadOf(
   return byY[chord.indexOf(note)];
 }
 
-/** 音符の符頭の周りに、色と形の印と、何回目かの文字を描く。描いた符頭の矩形を返す（描けなければ undefined）。 */
+function svg<K extends keyof SVGElementTagNameMap>(
+  tag: K,
+  attrs: Record<string, string | number>,
+): SVGElementTagNameMap[K] {
+  const e = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v));
+  return e;
+}
+
+/**
+ * 音符の符頭に、印の形（丸・左向きの三角・右向きの三角・×・点線の枠）と文字を描く（REQ-090。色だけに頼らない）。
+ * 文字は row 行目に置く（同じ符頭に2つ目の文字を描くときは 1）。描いた要素を返す。描けなければ undefined（符頭が見つからない）。
+ */
 export function drawMark(
   osmd: OpenSheetMusicDisplay,
   layer: SVGGElement,
   note: Note,
+  style: MarkStyle,
   label: string,
-  color: string,
-): DOMRect | undefined {
+  row = 0,
+): SVGElement[] | undefined {
   const el = noteheadOf(osmd, note);
   if (!el) return undefined;
   const b = el.getBBox();
   const pad = 3;
-  const rect = document.createElementNS(SVG_NS, "rect");
-  rect.setAttribute("x", String(b.x - pad));
-  rect.setAttribute("y", String(b.y - pad));
-  rect.setAttribute("width", String(b.width + pad * 2));
-  rect.setAttribute("height", String(b.height + pad * 2));
-  rect.setAttribute("rx", "4");
-  rect.setAttribute("fill", "none");
-  rect.setAttribute("stroke", color);
-  rect.setAttribute("stroke-width", "2");
-  const text = document.createElementNS(SVG_NS, "text");
-  text.setAttribute("x", String(b.x));
-  text.setAttribute("y", String(b.y - pad - 2));
-  text.setAttribute("fill", color);
-  text.setAttribute("font-size", "11");
+  const cx = b.x + b.width / 2;
+  const cy = b.y + b.height / 2;
+  const line = { stroke: style.color, "stroke-width": 2, fill: "none" };
+  const r = Math.max(b.width, b.height) / 2 + pad;
+  const shapes: SVGElement[] = [];
+  switch (style.shape) {
+    case "circle":
+      shapes.push(svg("circle", { cx, cy, r, ...line }));
+      break;
+    case "tri-left": {
+      const x = b.x - pad;
+      shapes.push(
+        svg("polygon", {
+          points: `${x - 8},${cy} ${x},${cy - 5} ${x},${cy + 5}`,
+          fill: style.color,
+        }),
+      );
+      break;
+    }
+    case "tri-right": {
+      const x = b.x + b.width + pad;
+      shapes.push(
+        svg("polygon", {
+          points: `${x + 8},${cy} ${x},${cy - 5} ${x},${cy + 5}`,
+          fill: style.color,
+        }),
+      );
+      break;
+    }
+    case "cross":
+      shapes.push(
+        svg("line", {
+          x1: cx - r,
+          y1: cy - r,
+          x2: cx + r,
+          y2: cy + r,
+          ...line,
+        }),
+        svg("line", {
+          x1: cx - r,
+          y1: cy + r,
+          x2: cx + r,
+          y2: cy - r,
+          ...line,
+        }),
+      );
+      break;
+    case "underline":
+      shapes.push(
+        svg("line", {
+          x1: b.x - pad,
+          y1: b.y + b.height + pad + 2,
+          x2: b.x + b.width + pad,
+          y2: b.y + b.height + pad + 2,
+          ...line,
+          "stroke-width": 3,
+        }),
+      );
+      break;
+    case "dash":
+      shapes.push(
+        svg("rect", {
+          x: b.x - pad,
+          y: b.y - pad,
+          width: b.width + pad * 2,
+          height: b.height + pad * 2,
+          "stroke-dasharray": "3 2",
+          ...line,
+        }),
+      );
+      break;
+  }
+  const text = svg("text", {
+    x: b.x,
+    y: labelY(b.y, row),
+    fill: style.color,
+    "font-size": 11,
+  });
   text.textContent = label;
-  layer.append(rect, text);
-  return b;
+  layer.append(...shapes, text);
+  return [...shapes, text];
 }
