@@ -162,11 +162,14 @@ function svg<K extends keyof SVGElementTagNameMap>(
   return e;
 }
 
-/** 楽譜の音符（符頭と符尾）の箱を集める。印の文字を、音符に重ねずに置くため。 */
+/**
+ * 楽譜の音符の箱を集める。印の文字を、音符に重ねずに置くため。
+ * 連桁でつないだ音符の符尾と連桁は、VexFlow が音符のグループの外に描くので、それらも集める（Astra の監査）。
+ */
 export function noteBoxes(container: HTMLElement): Box[] {
   const out: Box[] = [];
   for (const e of container.querySelectorAll<SVGGraphicsElement>(
-    "svg .vf-stavenote",
+    "svg .vf-stavenote, svg .vf-stem, svg .vf-beam, svg .vf-flag",
   )) {
     const b = e.getBBox();
     out.push({ x: b.x, y: b.y, width: b.width, height: b.height });
