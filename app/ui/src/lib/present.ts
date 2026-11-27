@@ -93,6 +93,35 @@ export function labelY(top: number, row: number): number {
   return top - 9 - row * LABEL_LINE;
 }
 
+/** 画面の上の箱（SVG の座標。y は下ほど大きい）。 */
+export type Box = { x: number; y: number; width: number; height: number };
+
+function overlaps(a: Box, b: Box): boolean {
+  return (
+    a.x < b.x + b.width &&
+    b.x < a.x + a.width &&
+    a.y < b.y + b.height &&
+    b.y < a.y + a.height
+  );
+}
+
+/**
+ * 印の文字の箱 want を、obstacles（ほかの文字と音符の箱）と重ならなくなるまで、1行（step）ずつ上へ上げる量を返す。
+ * 上げすぎないよう、maxSteps 行で止める（そのときは重なりが残る）。
+ */
+export function liftToClear(
+  want: Box,
+  obstacles: Box[],
+  step = LABEL_LINE,
+  maxSteps = 20,
+): number {
+  for (let k = 0; k < maxSteps; k++) {
+    const at = { ...want, y: want.y - k * step };
+    if (!obstacles.some((o) => overlaps(at, o))) return k * step;
+  }
+  return maxSteps * step;
+}
+
 /** 四分音符の数（分子、分母）。 */
 type Beat = { num: number; den: number };
 

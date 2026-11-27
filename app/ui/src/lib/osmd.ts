@@ -6,7 +6,7 @@ import type {
   VexFlowGraphicalNote,
 } from "opensheetmusicdisplay";
 import type { OsmdNote } from "./match";
-import { labelY, type MarkStyle } from "./present";
+import { type Box, labelY, liftToClear, type MarkStyle } from "./present";
 
 /** OSMD の楽譜から、休符でない音符と、その突き合わせ用の値を取り出す。 */
 export function extractNotes(osmd: OpenSheetMusicDisplay): {
@@ -162,9 +162,23 @@ function svg<K extends keyof SVGElementTagNameMap>(
   return e;
 }
 
+/** 楽譜の音符（符頭と符尾）の箱を集める。印の文字を、音符に重ねずに置くため。 */
+export function noteBoxes(container: HTMLElement): Box[] {
+  const out: Box[] = [];
+  for (const e of container.querySelectorAll<SVGGraphicsElement>(
+    "svg .vf-stavenote",
+  )) {
+    const b = e.getBBox();
+    out.push({ x: b.x, y: b.y, width: b.width, height: b.height });
+  }
+  return out;
+}
+
 /**
  * 音符の符頭に、印の形（丸・左向きの三角・右向きの三角・×・点線の枠）と文字を描く（REQ-090。色だけに頼らない）。
- * 文字は row 行目に置く（同じ符頭に2つ目の文字を描くときは 1）。描いた要素を返す。描けなければ undefined（符頭が見つからない）。
+ * 文字はその音符（和音なら和音全体、符尾を含む）のすぐ上に置き、notes（音符の箱）と、層にすでにある文字と
+ * 重なるなら、重ならなくなるまで1行ずつ上へ上げる（人間の指摘、2026-11-28）。
+ * 描いた要素を返す。描けなければ undefined（符頭が見つからない）。
  */
 export function drawMark(
   osmd: OpenSheetMusicDisplay,
@@ -172,7 +186,7 @@ export function drawMark(
   note: Note,
   style: MarkStyle,
   label: string,
-  row = 0,
+  notes: Box[],
 ): SVGElement[] | undefined {
   const el = noteheadOf(osmd, note);
   if (!el) return undefined;
@@ -250,13 +264,28 @@ export function drawMark(
       );
       break;
   }
+  // 文字の置き場所の基準：この音符の SVG の箱（和音全体と符尾を含む）の上端。取れなければ符頭の上端
+  const g = osmd.EngravingRules.GNote(note) as VexFlowGraphicalNote | undefined;
+  const top = Math.min(b.y, g?.getSVGGElement?.()?.getBBox().y ?? b.y);
+  const others: Box[] = [...notes];
+  for (const t of layer.querySelectorAll("text")) {
+    const tb = t.getBBox();
+    others.push({ x: tb.x, y: tb.y, width: tb.width, height: tb.height });
+  }
   const text = svg("text", {
     x: b.x,
-    y: labelY(b.y, row),
+    y: labelY(top, 0),
     fill: style.color,
     "font-size": 11,
   });
   text.textContent = label;
   layer.append(...shapes, text);
+  const tb = text.getBBox();
+  // 自分の音符の箱とは重ならない位置から始めるので、他と重なる分だけ上げる
+  const lift = liftToClear(
+    { x: tb.x, y: tb.y, width: tb.width, height: tb.height },
+    others,
+  );
+  if (lift > 0) text.setAttribute("y", String(labelY(top, 0) - lift));
   return [...shapes, text];
 }
