@@ -24,3 +24,7 @@ sha2 = { version = "=0.11.1", default-features = false }
 cpal = "=0.18.2"
 # 実際の MIDI の入力（1a-8）。人間が承認した（2026-11-26「二つについては承認します」。midir 0.11.1）
 midir = "=0.11.1"
+
+[features]
+# S2b で、Windows の MIDI の裏側を WinMM（既定）から winrt に替えて比べるため（midir の機能。人間が比較を承認、2026-11-28「S2b の winrt と比較する」）
+winrt = ["midir/winrt"]
