@@ -7,11 +7,17 @@ import {
   drawMark,
   extractNotes,
   moveCursor,
+  noteBoxes,
   noteheadOf,
   resetMarkLayer,
   walkCursor,
 } from "./osmd";
-import { type CursorEntry, cursorStepAt, type MarkStyle } from "./present";
+import {
+  type Box,
+  type CursorEntry,
+  cursorStepAt,
+  type MarkStyle,
+} from "./present";
 
 /** 突き合わせの数（画面に出して、対応が取れたかを見る）。 */
 export type SheetSummary = {
@@ -32,6 +38,8 @@ export class Sheet {
   private at = -1;
   /** OSMD の音符ごとの、いま描いてある印（繰り返しで同じ符頭を通ったら置き換える）。 */
   private drawn = new Map<number, SVGElement[]>();
+  /** 楽譜の音符の箱（印の文字を重ねないため。描き直したときに集め直す）。 */
+  private boxes: Box[] = [];
 
   constructor(private container: HTMLElement) {
     this.osmd = new OpenSheetMusicDisplay(container, {
@@ -79,6 +87,7 @@ export class Sheet {
         step: check.stepOf[i] ?? -1,
       }))
       .sort((a, b) => a.start - b.start);
+    this.boxes = noteBoxes(this.container);
     this.clearMarks();
     this.at = -1;
     this.showCursorAt(Number.NEGATIVE_INFINITY);
@@ -106,7 +115,8 @@ export class Sheet {
 
   /**
    * お手本の ref_index の音に印を描く。`replace` なら同じ符頭の前の印は消す（繰り返しの2回目で重ねない）。
-   * `replace` でなければ前の印を残し、文字は1行上に置く（止まった位置の印が、前の回の誤りと重ならないように）。描けなければ false。
+   * `replace` でなければ前の印を残す（止まった位置の印を、間違えた音の印に重ねて描く）。文字はほかの文字や音符と重ならない所に置く。
+   * 描けなければ false。
    */
   mark(
     refIndex: number,
@@ -121,10 +131,15 @@ export class Sheet {
     const pass = w.pass > 1 ? `(${w.pass}回目)` : "";
     if (!replace) {
       const label = `${style.label}${pass}${extra}`;
-      const row = this.drawn.has(o) ? 1 : 0;
       return (
-        drawMark(this.osmd, this.layer, this.notes[o], style, label, row) !==
-        undefined
+        drawMark(
+          this.osmd,
+          this.layer,
+          this.notes[o],
+          style,
+          label,
+          this.boxes,
+        ) !== undefined
       );
     }
     for (const e of this.drawn.get(o) ?? []) e.remove();
@@ -134,6 +149,7 @@ export class Sheet {
       this.notes[o],
       style,
       `${style.label}${pass}${extra}`,
+      this.boxes,
     );
     if (drawn) this.drawn.set(o, drawn);
     else this.drawn.delete(o);

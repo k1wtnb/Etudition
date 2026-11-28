@@ -6,6 +6,7 @@ import {
   cursorStepAt,
   formatScore,
   labelY,
+  liftToClear,
   type MarkKind,
   markKind,
   markStyle,
@@ -160,5 +161,36 @@ describe("カーソルをクリックに沿わせる（AC-17。1a-5）", () => {
     expect(anchorOf(5000, { ns: 1_500_000_000 })).toBe(3500);
     // 前カウントの最初（0 秒）のクリックなら、受けた時刻がそのまま時刻 0
     expect(anchorOf(1234, { ns: 0 })).toBe(1234);
+  });
+});
+
+describe("印の文字の置き場所（重ならない。人間の指摘、2026-11-28）", () => {
+  const box = (x: number, y: number, width = 20, height = 11) => ({
+    x,
+    y,
+    width,
+    height,
+  });
+
+  it("何とも重ならなければ動かさない", () => {
+    expect(liftToClear(box(0, 50), [box(30, 50), box(0, 80)])).toBe(0);
+  });
+
+  it("ほかの文字や音符と重なれば、重ならなくなるまで1行ずつ上へ上げる", () => {
+    // 同じ位置の文字が1つ → 1行上へ
+    expect(liftToClear(box(0, 50), [box(5, 50)])).toBe(13);
+    // 1行上にも文字がある → 2行上へ
+    expect(liftToClear(box(0, 50), [box(5, 50), box(5, 37)])).toBe(26);
+    // 長い文字は、横に並ぶ音符の箱（符尾を含む）とも重ならないよう上げる
+    expect(liftToClear(box(0, 50, 80), [box(60, 30, 10, 40)])).toBe(39);
+  });
+
+  it("辺が接するだけなら重なりとみなさない", () => {
+    expect(liftToClear(box(0, 50), [box(20, 50), box(0, 61)])).toBe(0);
+  });
+
+  it("上げる回数には上限がある（上がりすぎない）", () => {
+    const wall = box(0, -10000, 20, 20000);
+    expect(liftToClear(box(0, 50), [wall], 13, 5)).toBe(65);
   });
 });
