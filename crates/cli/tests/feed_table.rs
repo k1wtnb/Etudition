@@ -80,10 +80,9 @@ fn shift(p: &mut P, by: i64) {
 
 /// 時刻を tick にする。割り切れない時刻は試験の誤りとして止める。
 fn tick(e: &Expansion, ns: i64) -> i64 {
-    let pickup = e
-        .measures
-        .first()
-        .map_or(Quarters::ZERO, |m| Quarters::ZERO - m.start.min(Quarters::ZERO));
+    let pickup = e.measures.first().map_or(Quarters::ZERO, |m| {
+        Quarters::ZERO - m.start.min(Quarters::ZERO)
+    });
     let lead = pickup + Quarters::new(LEAD, 1);
     assert_eq!((lead.num() * PPQ) % lead.den(), 0);
     let d = ns - timing().origin_ns;
@@ -204,11 +203,14 @@ fn end(r: &RunResult) -> (EndKind, i64) {
     (r.end.kind, r.end.at_ns)
 }
 
+/// お手本の1音（音高、位置、長さ、装飾音か）。
+type Ref = (i32, Quarters, Quarters, bool);
+
 /// 試験の楽譜が、仕様の 9-1 のお手本（音高、位置、長さ、装飾音か。並びは SR-01）のとおりか。
 #[test]
 fn fixtures_match_the_spec() {
     let q = Quarters::new;
-    let cases: [(&str, &[u8], Vec<(i32, Quarters, Quarters, bool)>); 5] = [
+    let cases: [(&str, &[u8], Vec<Ref>); 5] = [
         (
             "T2",
             T2,
@@ -227,7 +229,10 @@ fn fixtures_match_the_spec() {
         (
             "T4",
             T4,
-            vec![(55, q(-1, 1), q(1, 1), false), (60, q(0, 1), q(4, 1), false)],
+            vec![
+                (55, q(-1, 1), q(1, 1), false),
+                (60, q(0, 1), q(4, 1), false),
+            ],
         ),
         (
             "T6",
